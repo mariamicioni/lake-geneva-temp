@@ -1,0 +1,23 @@
+# secrets
+.env
+# python
+__pycache__/
+*.pyc
+.venv/
+venv/
+.ipynb_checkpoints/
+.pytest_cache/
+# data & models (never in git)
+data/
+*.parquet
+*.csv
+mlruns/
+mlartifacts/
+models/
+*.pkl
+*.joblib
+# os / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

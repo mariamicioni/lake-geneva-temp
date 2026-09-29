@@ -1,0 +1,8 @@
+water:
+  station_id: "2606"        # Rhône, Genève Halle de l'Île (Lake Geneva outflow)
+  parameters: [temperature, flow]
+weather:
+  latitude: 46.20
+  longitude: 6.14
+forecast:
+  horizon_days: 1
