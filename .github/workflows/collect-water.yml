@@ -1,4 +1,4 @@
-name: Collect water data
+name: Collect raw data
 
 on:
   schedule:
@@ -21,12 +21,17 @@ jobs:
       - name: Download the last 7 days from existenz.ch
         run: python src/lakegeneva/features/ingest_water.py --days 7 --out raw
 
-      - name: Upload the snapshot to the raw-data release
+      - name: Save the current weather forecast from Open-Meteo
+        if: always()            # still runs if the water download failed
+        run: python src/lakegeneva/features/ingest_weather.py --out raw
+
+      - name: Upload the snapshots to the raw-data release
+        if: always()            # upload whatever was downloaded
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release view raw-data > /dev/null 2>&1 || gh release create raw-data \
-            --title "Raw water data" \
-            --notes "Daily raw snapshots of BAFU station 2606 via existenz.ch. Backup until the feature store on GCS is set up." \
+            --title "Raw data" \
+            --notes "Daily raw snapshots: BAFU station 2606 via existenz.ch and the Open-Meteo forecast for Geneva. Backup until the feature store on GCS is set up." \
             --latest=false
           gh release upload raw-data raw/*.csv --clobber
