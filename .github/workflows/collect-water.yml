@@ -2,7 +2,7 @@ name: Collect raw data
 
 on:
   schedule:
-    - cron: "17 3 * * *"   # every day at 03:17 UTC
+    - cron: "47 15 * * *"  # every day at 15:47 UTC (17:47 Swiss summer time, 16:47 winter time), before the 18:00 cutoff
   workflow_dispatch:        # allows a manual run from the Actions tab
 
 permissions:
