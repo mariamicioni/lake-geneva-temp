@@ -8,12 +8,14 @@ import argparse
 import csv
 import datetime as dt
 import json
+import time
 import urllib.request
 from pathlib import Path
 
 API_URL = "https://api.existenz.ch/apiv1/hydro/daterange"
 STATION = "2606"
 PARAMETERS = "temperature,flow"
+USER_AGENT = "lake-geneva-temp (student project, github.com/mariamicioni/lake-geneva-temp)"
 
 
 def fetch(start: dt.date, end: dt.date) -> dict[int, dict[str, float]]:
@@ -22,8 +24,18 @@ def fetch(start: dt.date, end: dt.date) -> dict[int, dict[str, float]]:
         f"{API_URL}?locations={STATION}&parameters={PARAMETERS}"
         f"&startdate={start}&enddate={end}&app=lake-geneva-temp"
     )
-    with urllib.request.urlopen(url, timeout=60) as response:
-        payload = json.load(response)["payload"]
+    # The API sometimes answers with an empty body for a short time, so try a few times.
+    for attempt in range(1, 4):
+        try:
+            request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+            with urllib.request.urlopen(request, timeout=60) as response:
+                payload = json.load(response)["payload"]
+            break
+        except (OSError, ValueError, KeyError) as error:
+            if attempt == 3:
+                raise
+            print(f"Attempt {attempt} failed ({error}), retrying in 60 s")
+            time.sleep(60)
 
     readings: dict[int, dict[str, float]] = {}
     for item in payload:
