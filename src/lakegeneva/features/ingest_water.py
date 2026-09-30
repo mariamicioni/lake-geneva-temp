@@ -60,7 +60,8 @@ def main() -> None:
     args = parser.parse_args()
 
     today = dt.datetime.now(dt.timezone.utc).date()
-    readings = fetch(today - dt.timedelta(days=args.days), today)
+    # The API treats enddate as 00:00 of that day, so ask until tomorrow to include today.
+    readings = fetch(today - dt.timedelta(days=args.days), today + dt.timedelta(days=1))
     if not readings:
         raise SystemExit("The API returned no readings.")
 
