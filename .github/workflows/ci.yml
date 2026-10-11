@@ -1,0 +1,23 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:        # allows a manual run from the Actions tab
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: astral-sh/setup-uv@v10.2.0   # no moving major tag, so the full version
+        with:
+          enable-cache: true
+
+      - name: Install the exact versions from uv.lock
+        run: uv sync --locked   # fails if uv.lock does not match pyproject.toml
+
+      - name: Run the tests
+        run: uv run pytest -v
