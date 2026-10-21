@@ -5,7 +5,7 @@ Predicts tomorrow's average water temperature of Lake Geneva at Geneva (BAFU sta
 Built as the MLOps HS26 semester project (HSLU) using the Feature / Training / Inference (FTI) pipeline architecture.
 
 ## Data sources
-- **Water:** FOEN/BAFU hydrology data via [api.existenz.ch](https://api.existenz.ch) (water temperature and flow, 10-min resolution). Fallback: official BAFU feed via LINDAS (ld.admin.ch).
+- **Water:** FOEN/BAFU hydrology data via [api.existenz.ch](https://api.existenz.ch) (water temperature and flow, 10-min resolution). Fallback when existenz.ch does not answer: the same 10-min values from the official [BAFU Data Platform](https://data.bafu.admin.ch).
 - **Weather:** [Open-Meteo](https://open-meteo.com) forecast API; backfill from the Single Runs API (forecasts published before the 18:00 cutoff).
 
 ## Where the data lives
@@ -32,3 +32,25 @@ config/        settings without secrets
 notebooks/     exploration only
 docs/          proposal and milestone summaries
 ```
+
+## Where the code comes from
+I build this project on what the MLOps HS26 course teaches. When a file follows a course exercise, its header names the source. This table grows with every milestone.
+
+| File | Based on | What I changed |
+|---|---|---|
+| `.github/workflows/ci.yml` | Block 1 exercise, Part D [5] | No model training step yet; runs the unit tests only |
+| `pyproject.toml`, `uv.lock` | uv dependency management [4] | Own package layout under `src/lakegeneva/` |
+| `src/lakegeneva/features/ingest_bafu.py` | BAFU Data Platform API documentation [1] | Written for this project |
+| `src/lakegeneva/features/ingest_water.py` | existenz.ch Hydrology API documentation [2], BAFU Data Platform API documentation [1] (fallback) | Written for this project |
+| `src/lakegeneva/features/ingest_weather.py` | Open-Meteo Forecast API documentation [3] | Written for this project |
+
+No code is copied from past student projects (mlops-lab.ch, KTH ID2223).
+
+**AI use:** Anthropic Claude (Claude Code) helped me write and test the code and the documentation. I reviewed every line and can explain it, and I am responsible for all technical decisions.
+
+## References
+[1] FOEN/BAFU (2026). BAFU Data Platform, Hydrological Observations API (GraphQL). accessed on 11.10.2026 from data.bafu.admin.ch
+[2] Existenz.ch (2026). Hydrology API (republished BAFU data). accessed on 01.10.2026 from api.existenz.ch
+[3] Open-Meteo (2026). Weather Forecast API. accessed on 20.10.2026 from open-meteo.com/en/docs
+[4] Bär, Florian (2026). Versioning and Containerization, MLOps HS26 Block 1, lecture slides. Lucerne University of Applied Sciences and Arts.
+[5] Bär, Florian (2026). Course project, Block 1: version the data, track the model, ship the service (exercise_quotes_1_version_and_ship), Part D: CI. MLOps HS26, Lucerne University of Applied Sciences and Arts.
