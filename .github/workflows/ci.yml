@@ -1,23 +1,38 @@
+# Based on the MLOps HS26 Block 1 exercise, Part D (CI with uv), F. Bär [5] in README.md.
+#
+# CI = continuous integration: on every push, a fresh GitHub machine (not my
+# laptop) installs the project and runs the tests. If it works there, it does not
+# only "work on my machine". The result shows as a green tick or red cross on
+# each commit on GitHub.
 name: CI
 
+# When the workflow runs:
 on:
   push:
-    branches: [main]
-  pull_request:
+    branches: [main]        # every push to the main branch
+  pull_request:             # every pull request
   workflow_dispatch:        # allows a manual run from the Actions tab
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-latest  # a fresh Linux machine from GitHub, deleted after the run
     steps:
+      # 1. Copy the repository onto the machine.
       - uses: actions/checkout@v7
 
+      # 2. Install uv, the package manager (it also installs the Python version
+      #    from .python-version). enable-cache keeps downloaded packages between
+      #    runs, so the next run is faster.
       - uses: astral-sh/setup-uv@v10.2.0   # no moving major tag, so the full version
         with:
           enable-cache: true
 
+      # 3. Install exactly the package versions written in uv.lock (pinned
+      #    dependencies). --locked makes the run fail if uv.lock is out of date
+      #    with pyproject.toml, instead of silently installing other versions.
       - name: Install the exact versions from uv.lock
         run: uv sync --locked   # fails if uv.lock does not match pyproject.toml
 
+      # 4. Run all tests in tests/. -v prints each test name with PASSED/FAILED.
       - name: Run the tests
         run: uv run pytest -v
