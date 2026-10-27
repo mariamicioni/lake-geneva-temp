@@ -1,20 +1,32 @@
 """Download raw water readings of BAFU station 2606 (Lake Geneva outflow, Geneva).
 
-Each run writes one CSV snapshot of the last N days. Snapshots overlap on purpose,
-so a missed run loses nothing; duplicates are removed later in the feature pipeline.
+Daily run: one CSV snapshot of the last N days. Snapshots overlap on purpose, so a
+missed run loses nothing; duplicates are removed later in the feature pipeline.
+Backfill: the same 10-minute readings for any date range (--start/--end), from the
+BAFU Data Platform, because existenz.ch only keeps about 32 days:
+
+    python src/lakegeneva/features/ingest_water.py                       # last 7 days
+    python src/lakegeneva/features/ingest_water.py --start 2016-01-01    # backfill
+
 Only uses the standard library, so it runs without installing anything.
 """
 # What this file is for: the 10-minute readings (144 per day). The proposal's
 # features need them: "mean water temperature today until 18:00" and "last reading
 # before 18:00" cannot be computed from BAFU's full-day means (see ingest_bafu.py).
 # existenz.ch republishes the BAFU readings as a simple REST API, but only keeps
-# about 32 days, which is why the history comes from ingest_bafu.py instead.
+# about 32 days, so the 10-minute history comes from the BAFU Data Platform (see
+# "Backfill" below); ingest_bafu.py adds the daily means back to 2016.
 # Fallback: existenz.ch is run privately with no uptime guarantee (it failed on
 # 19.10 and 21.10.2026). If it does not answer, the same 10-minute values are
 # taken from the official BAFU Data Platform, so the daily file is still written.
+# Backfill: the 18:00 features and the label rule (at least 120 of 144 readings)
+# need 10-minute readings for every training day, not only daily means. So the
+# history comes through this same script and is written in the same CSV format as
+# the daily files - the course calls this "backfilling" (Feature Store slides,
+# p.7-8): one pipeline, run with a start and end date over old data.
 
 # All imports are from the Python standard library (nothing to install).
-import argparse  # reads the command-line options --days and --out
+import argparse  # reads the command-line options --days, --start, --end and --out
 import csv  # writes the result as a CSV file
 import datetime as dt  # dates, times and time zones
 import json  # reads the API answer
@@ -120,6 +132,25 @@ def fetch_bafu(start: dt.date, end: dt.date) -> dict[int, dict[str, float]]:
     return readings
 
 
+def fetch_bafu_history(start: dt.date, end: dt.date, chunk_days: int = 30) -> dict[int, dict[str, float]]:
+    """Same as fetch_bafu(), for a long range: downloads it in pieces of 30 days."""
+    # Ten years of 10-minute values are over a million rows, too much for one
+    # request. A piece of 30 days is 30 x 144 readings x 2 parameters = 8,640 rows
+    # (tested on 27.10.2026: about 4 seconds per piece).
+    readings: dict[int, dict[str, float]] = {}
+    piece_start = start
+    while piece_start < end:
+        # The last piece can be shorter, so that it never goes past `end`.
+        piece_end = min(piece_start + dt.timedelta(days=chunk_days), end)
+        # The pieces do not overlap (each one stops where the next one starts), so
+        # update() simply adds the new readings to the ones we already have.
+        readings.update(fetch_bafu(piece_start, piece_end))
+        print(f"Downloaded {piece_start} to {piece_end}: {len(readings)} readings so far")
+        piece_start = piece_end
+        time.sleep(1)  # a short pause between requests, to be polite to the API
+    return readings
+
+
 def write_csv(readings: dict[int, dict[str, float]], path: Path) -> None:
     # Create the output folder if it does not exist yet (no error if it does).
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -139,27 +170,46 @@ def write_csv(readings: dict[int, dict[str, float]], path: Path) -> None:
 
 def main() -> None:
     # Command-line options; __doc__ (the text at the top) becomes the --help text.
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--days", type=int, default=7, help="how many past days to download")
+    # RawDescriptionHelpFormatter keeps the line breaks of the examples in --help.
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--days", type=int, default=7, help="daily run: how many past days to download")
+    # type=dt.date.fromisoformat turns "2016-01-01" into a date object.
+    parser.add_argument("--start", type=dt.date.fromisoformat, help="backfill: first day, YYYY-MM-DD")
+    parser.add_argument("--end", type=dt.date.fromisoformat, help="backfill: last day, YYYY-MM-DD (default: today)")
     parser.add_argument("--out", default="data/raw", help="output folder")
     args = parser.parse_args()
+    if args.end and not args.start:
+        # parser.error() prints the message and stops, like a wrong option does.
+        parser.error("--end only works together with --start")
 
     today = dt.datetime.now(dt.timezone.utc).date()
-    # The API treats enddate as 00:00 of that day, so ask until tomorrow to include today.
-    start, end = today - dt.timedelta(days=args.days), today + dt.timedelta(days=1)
-    try:
-        readings = fetch(start, end)
-    except (OSError, ValueError, KeyError) as error:
-        # existenz.ch failed 3 times: take the same readings from BAFU instead.
-        # The message shows up in the GitHub log, so we know which source was used.
-        print(f"existenz.ch failed ({error}), using the BAFU Data Platform instead")
-        readings = fetch_bafu(start, end)
+    if args.start:
+        # Backfill: only the BAFU Data Platform has the history.
+        end = args.end or today
+        # Our days are Swiss days, but the API works in UTC. A Swiss day starts at
+        # 22:00 or 23:00 UTC of the day before, so we start one UTC day earlier and
+        # stop at the end of the UTC day `end`: every Swiss hour is included. The
+        # extra hours do no harm, the features keep only what they need.
+        readings = fetch_bafu_history(args.start - dt.timedelta(days=1), end + dt.timedelta(days=1))
+        # One file for the whole range, e.g. water_2606_10min_2016-01-01_to_2026-10-27.csv
+        path = Path(args.out) / f"water_{STATION}_10min_{args.start}_to_{end}.csv"
+    else:
+        # Daily run. The API treats enddate as 00:00 of that day, so ask until
+        # tomorrow to include today.
+        start, end = today - dt.timedelta(days=args.days), today + dt.timedelta(days=1)
+        try:
+            readings = fetch(start, end)
+        except (OSError, ValueError, KeyError) as error:
+            # existenz.ch failed 3 times: take the same readings from BAFU instead.
+            # The message shows up in the GitHub log, so we know which source was used.
+            print(f"existenz.ch failed ({error}), using the BAFU Data Platform instead")
+            readings = fetch_bafu(start, end)
+        # One file per run, named after the download day, e.g. water_2606_fetched_2026-10-20.csv
+        path = Path(args.out) / f"water_{STATION}_fetched_{today}.csv"
     if not readings:
         # SystemExit stops the script with an error, so the GitHub job turns red.
         raise SystemExit("The API returned no readings.")
 
-    # One file per run, named after the download day, e.g. water_2606_fetched_2026-10-20.csv
-    path = Path(args.out) / f"water_{STATION}_fetched_{today}.csv"
     write_csv(readings, path)
     print(f"Saved {len(readings)} readings to {path}")
 

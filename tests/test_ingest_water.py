@@ -98,3 +98,54 @@ def test_main_falls_back_to_bafu_when_existenz_fails(monkeypatch, tmp_path):
     # The CSV was still written, with the reading from the fallback.
     [path] = tmp_path.glob("water_2606_fetched_*.csv")
     assert "2025-10-09T08:53:20+00:00,18.5," in path.read_text()
+
+
+def test_fetch_bafu_history_downloads_in_pieces_without_gaps(monkeypatch):
+    # A stand-in for fetch_bafu(): it notes which range was asked for and returns
+    # one fake reading per piece (the Unix time of the piece's first day).
+    asked = []
+
+    def fake_fetch_bafu(start, end):
+        asked.append((start, end))
+        ts = int(dt.datetime.combine(start, dt.time(), dt.timezone.utc).timestamp())
+        return {ts: {"temperature": 7.0}}
+
+    monkeypatch.setattr(ingest_water, "fetch_bafu", fake_fetch_bafu)
+    # No 1-second pause between the pieces during the test.
+    monkeypatch.setattr(ingest_water.time, "sleep", lambda seconds: None)
+
+    readings = ingest_water.fetch_bafu_history(dt.date(2024, 1, 1), dt.date(2024, 3, 15), chunk_days=30)
+
+    # Three pieces: each starts where the last one stopped (no gap, no overlap),
+    # and the last one is shorter, so it stops exactly at the end.
+    assert asked == [
+        (dt.date(2024, 1, 1), dt.date(2024, 1, 31)),
+        (dt.date(2024, 1, 31), dt.date(2024, 3, 1)),
+        (dt.date(2024, 3, 1), dt.date(2024, 3, 15)),
+    ]
+    # The readings of all three pieces end up in one dict.
+    assert len(readings) == 3
+
+
+def test_main_backfill_covers_whole_swiss_days(monkeypatch, tmp_path):
+    # A stand-in for fetch_bafu_history() that notes the range it was asked for.
+    asked = []
+
+    def fake_history(start, end):
+        asked.append((start, end))
+        return {1760000000: {"temperature": 18.5, "flow": 250.0}}
+
+    monkeypatch.setattr(ingest_water, "fetch_bafu_history", fake_history)
+    # Pretend the script was started for a backfill of two days.
+    monkeypatch.setattr(
+        "sys.argv", ["ingest_water.py", "--start", "2024-01-20", "--end", "2024-01-21", "--out", str(tmp_path)]
+    )
+
+    ingest_water.main()
+
+    # One UTC day extra on each side, so the Swiss days 20.01 and 21.01 are complete
+    # (a Swiss day starts at 23:00 UTC of the day before in winter).
+    assert asked == [(dt.date(2024, 1, 19), dt.date(2024, 1, 22))]
+    # The file is named after the requested range, in the same format as the daily files.
+    path = tmp_path / "water_2606_10min_2024-01-20_to_2024-01-21.csv"
+    assert path.read_text().splitlines() == ["time_utc,water_temp_c,flow_m3s", "2025-10-09T08:53:20+00:00,18.5,250.0"]
