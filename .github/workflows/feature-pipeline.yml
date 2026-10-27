@@ -85,6 +85,12 @@ jobs:
       - name: Save the newest forecast (audit copy)
         if: always() && steps.pull.outcome == 'success'
         run: uv run --locked --no-dev python src/lakegeneva/features/ingest_weather.py --out data/raw
+      # The forecast of the ECMWF run started at 06:00 UTC (published before 18:00),
+      # for the comparison with the 48-hour-old forecast in MS3; the runs of the
+      # last 7 days, so a missed day is filled in.
+      - name: Download the forecast of the 06 UTC model run
+        if: always() && steps.pull.outcome == 'success'
+        run: uv run --locked --no-dev python src/lakegeneva/features/ingest_weather_single.py --out data/raw
 
       # 8. Rebuild the whole feature table from all raw files (about 2 seconds).
       - name: Build the feature table
