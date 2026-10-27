@@ -31,9 +31,9 @@ def test_fetch_asks_for_the_48_hour_old_values(monkeypatch):
     # Every variable is asked for as its 48-hour-old version ...
     for variable in ["temperature_2m", "sunshine_duration", "wind_speed_10m", "wind_direction_10m"]:
         assert f"{variable}_previous_day2" in url
-    # ... for the requested days, in Swiss time.
+    # ... for the requested days, in UTC (features.py converts to Swiss time).
     assert "start_date=2024-01-20&end_date=2024-01-21" in url
-    assert "timezone=Europe/Zurich" in url
+    assert "timezone=GMT" in url
 
 
 def test_write_csv_has_one_row_per_hour_and_leaves_missing_values_empty(tmp_path):
@@ -59,7 +59,7 @@ def test_write_csv_has_one_row_per_hour_and_leaves_missing_values_empty(tmp_path
     assert rows == [
         [
             "fetched_at_utc",
-            "time_local",
+            "time_utc",
             "temperature_2m_previous_day2",
             "sunshine_duration_previous_day2",
             "wind_speed_10m_previous_day2",
@@ -105,7 +105,7 @@ def test_main_backfill_writes_one_file_for_the_range(monkeypatch, tmp_path):
 
     ingest_weather_runs.main()
 
-    # The days are passed on unchanged: Open-Meteo already works in Swiss days.
+    # The days are passed on unchanged (as UTC days).
     assert asked == [(dt.date(2024, 1, 20), dt.date(2026, 10, 28))]
     # One file named after the range.
     assert (tmp_path / "weather_geneva_prev2_2024-01-20_to_2026-10-28.csv").exists()
