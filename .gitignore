@@ -11,6 +11,8 @@ venv/
 data/
 *.parquet
 *.csv
+# ... except the small test sample (4 days of real BAFU readings) used by the tests
+!tests/fixtures/*.csv
 mlruns/
 mlartifacts/
 models/

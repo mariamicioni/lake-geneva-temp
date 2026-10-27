@@ -9,7 +9,7 @@ Built as the MLOps HS26 semester project (HSLU) using the Feature / Training / I
 - **Weather:** [Open-Meteo](https://open-meteo.com). The features use the Previous Runs API: for every hour, the forecast made 48 hours earlier, which always existed before the 18:00 cutoff (complete from 20.01.2024). The daily job also saves the newest forecast as an audit copy. Planned: the Single Runs API (the last forecast run published before 18:00), to compare with the 48-hour-old forecast.
 
 ## Where the data lives
-Data and models are never stored in Git; Git only holds code, configuration and small DVC pointer files.
+Data and models are never stored in Git; Git only holds code, configuration and small DVC pointer files. The only exception is a 4-day test sample of real BAFU readings in `tests/fixtures/` (22 KB), so that CI can test the feature code without the data.
 - **Now (MS1):** a daily GitHub Actions job (`.github/workflows/collect-water.yml`) saves raw CSV snapshots as a temporary backup in the [`raw-data` release](https://github.com/mariamicioni/lake-geneva-temp/releases/tag/raw-data), which is outside the Git history.
 - **From MS2:** the job writes raw data and features to Google Cloud Storage, versioned with DVC; the GitHub Release is then removed.
 - **Models:** MLflow tracking and model registry hosted on DagsHub (alias `champion` = model in production).
@@ -44,6 +44,7 @@ I build this project on what the MLOps HS26 course teaches. When a file follows 
 | `src/lakegeneva/features/ingest_water.py` | existenz.ch Hydrology API documentation [2], BAFU Data Platform API documentation [1] (fallback and backfill) | Written for this project |
 | `src/lakegeneva/features/ingest_weather.py` | Open-Meteo Forecast API documentation [3] | Written for this project |
 | `src/lakegeneva/features/ingest_weather_runs.py` | Open-Meteo Previous Runs API documentation [6] | Written for this project |
+| `src/lakegeneva/common/features.py` | The features of my proposal (`docs/proposal.pdf`), pandas documentation [7] | Written for this project |
 
 No code is copied from past student projects (mlops-lab.ch, KTH ID2223).
 
@@ -56,3 +57,4 @@ No code is copied from past student projects (mlops-lab.ch, KTH ID2223).
 [4] Bär, Florian (2026). Versioning and Containerization, MLOps HS26 Block 1, lecture slides. Lucerne University of Applied Sciences and Arts.
 [5] Bär, Florian (2026). Course project, Block 1: version the data, track the model, ship the service (exercise_quotes_1_version_and_ship), Part D: CI. MLOps HS26, Lucerne University of Applied Sciences and Arts.
 [6] Open-Meteo (2026). Previous Runs API. accessed on 27.10.2026 from open-meteo.com/en/docs/previous-runs-api
+[7] pandas development team (2026). pandas documentation, version 3.1. accessed on 27.10.2026 from pandas.pydata.org/docs
