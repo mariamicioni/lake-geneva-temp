@@ -18,7 +18,8 @@ def test_parquet_file_gives_back_exactly_the_same_table(tmp_path):
     hours = pd.DataFrame(
         {
             "fetched_at_utc": "2026-10-27T19:00:00+00:00",
-            "time_local": pd.date_range("2026-03-27", periods=5 * 24, freq="h").strftime("%Y-%m-%dT%H:%M"),
+            # 26.03 23:00 UTC = 27.03 00:00 Swiss time, then 5 days of hours in UTC.
+            "time_utc": pd.date_range("2026-03-26 23:00", periods=5 * 24, freq="h").strftime("%Y-%m-%dT%H:%M"),
             features.TEMPERATURE: 8.0,
             features.SUNSHINE: 1800.0,
             features.WIND_SPEED: 12.0,
