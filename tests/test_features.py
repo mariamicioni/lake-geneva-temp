@@ -147,11 +147,16 @@ def test_real_sample_around_the_clock_change():
 
 
 def forecast_hours(day: str, temperature=10.0, sunshine=1800.0, speed=10.0, direction=225.0) -> pd.DataFrame:
-    """24 hours of a fake 48-hour-old forecast for one day, as load_weather() returns them."""
+    """All hours of a fake 48-hour-old forecast for one Swiss day, as load_weather() returns them."""
+    # From 00:00 to 00:00 of the next day on the Swiss clock: 24 hours, or 23/25 on
+    # a clock-change day (DateOffset(days=1) = the next calendar day).
+    start = pd.Timestamp(day, tz="Europe/Zurich")
+    local = pd.date_range(start, start + pd.DateOffset(days=1), freq="h", inclusive="left")
     return pd.DataFrame(
         {
             "fetched_at_utc": pd.Timestamp("2026-10-27 19:00", tz="UTC"),
-            "time_local": pd.date_range(day, periods=24, freq="h"),  # 00:00 to 23:00
+            "time_utc": local.tz_convert("UTC"),
+            "time_local": local,
             features.TEMPERATURE: temperature,
             features.SUNSHINE: sunshine,
             features.WIND_SPEED: speed,
@@ -230,19 +235,19 @@ def test_forecast_day_with_missing_hours_gives_no_weather_features():
 
 def test_load_weather_keeps_the_newest_download_and_ignores_the_snapshots(tmp_path):
     header = (
-        "fetched_at_utc,time_local,temperature_2m_previous_day2,sunshine_duration_previous_day2,"
+        "fetched_at_utc,time_utc,temperature_2m_previous_day2,sunshine_duration_previous_day2,"
         "wind_speed_10m_previous_day2,wind_direction_10m_previous_day2\n"
     )
-    # The same hour (02.10 12:00) in two downloads, one day apart.
+    # The same hour (02.10 10:00 UTC) in two downloads, one day apart.
     (tmp_path / "weather_geneva_prev2_2026-10-01_to_2026-10-02.csv").write_text(
-        header + "2026-10-01T19:00:00+00:00,2026-10-02T12:00,15.0,3600,10,225\n"
+        header + "2026-10-01T19:00:00+00:00,2026-10-02T10:00,15.0,3600,10,225\n"
     )
     (tmp_path / "weather_geneva_prev2_2026-09-25_to_2026-10-03.csv").write_text(
-        header + "2026-10-02T19:00:00+00:00,2026-10-02T12:00,15.5,3600,10,225\n"
+        header + "2026-10-02T19:00:00+00:00,2026-10-02T10:00,15.5,3600,10,225\n"
     )
     # A snapshot of the newest forecast (downloaded after 18:00): it must not be read.
     (tmp_path / "weather_geneva_fetched_2026-10-02.csv").write_text(
-        "fetched_at_utc,time_local,temperature_2m\n2026-10-02T19:00:00+00:00,2026-10-02T12:00,99.0\n"
+        "fetched_at_utc,time_utc,temperature_2m\n2026-10-02T19:00:00+00:00,2026-10-02T10:00,99.0\n"
     )
 
     hours = features.load_weather(tmp_path)
@@ -250,13 +255,40 @@ def test_load_weather_keeps_the_newest_download_and_ignores_the_snapshots(tmp_pa
     # One hour, from the newer download (02.10), although its file comes first in
     # name order; the 99 °C of the snapshot is not there.
     assert list(hours[features.TEMPERATURE]) == [15.5]
+    # 10:00 UTC is 12:00 on the Swiss clock (summer time until 25.10.2026).
+    assert hours["time_local"].iloc[0] == pd.Timestamp("2026-10-02 12:00", tz="Europe/Zurich")
+
+
+def test_load_weather_undoes_the_open_meteo_shift_of_old_files(tmp_path):
+    # An OLD file (time_local), downloaded on 27.10.2026 in winter time: Open-Meteo
+    # shifted every hour by +1 h, also this summer hour, so "12:00" means 11:00 UTC.
+    (tmp_path / "weather_geneva_prev2_2025-07-01_to_2025-07-01.csv").write_text(
+        "fetched_at_utc,time_local,temperature_2m_previous_day2,sunshine_duration_previous_day2,"
+        "wind_speed_10m_previous_day2,wind_direction_10m_previous_day2\n"
+        "2026-10-27T11:13:00+00:00,2025-07-01T12:00,24.0,3600,10,225\n"
+    )
+    # A NEW file (time_utc) with the same hour, downloaded later.
+    (tmp_path / "weather_geneva_prev2_2025-06-30_to_2025-07-02.csv").write_text(
+        "fetched_at_utc,time_utc,temperature_2m_previous_day2,sunshine_duration_previous_day2,"
+        "wind_speed_10m_previous_day2,wind_direction_10m_previous_day2\n"
+        "2026-10-28T19:00:00+00:00,2025-07-01T11:00,24.0,3600,10,225\n"
+    )
+
+    hours = features.load_weather(tmp_path)
+
+    # Both describe 11:00 UTC, so they are one hour after loading ...
+    assert len(hours) == 1
+    assert hours["time_utc"].iloc[0] == pd.Timestamp("2025-07-01 11:00", tz="UTC")
+    # ... which is 13:00 on the Swiss clock in summer (UTC+2), not 12:00.
+    assert hours["time_local"].iloc[0] == pd.Timestamp("2025-07-01 13:00", tz="Europe/Zurich")
 
 
 def test_feature_table_has_all_features_and_the_label(tmp_path):
     # One raw folder with the real water sample and a fake forecast for the same days.
     (tmp_path / "water_2606_sample.csv").write_text((FIXTURES / "water_2606_sample.csv").read_text())
     hours = pd.concat([forecast_hours(f"2026-03-{d}") for d in range(27, 32)], ignore_index=True)
-    hours.to_csv(tmp_path / "weather_geneva_prev2_2026-03-27_to_2026-03-31.csv", index=False)
+    # Saved like a real file: the UTC time only (time_local is computed when reading).
+    hours.drop(columns="time_local").to_csv(tmp_path / "weather_geneva_prev2_2026-03-27_to_2026-03-31.csv", index=False)
 
     table = features.feature_table(tmp_path)
 
