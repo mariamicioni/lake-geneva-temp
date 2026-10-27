@@ -40,9 +40,10 @@ I build this project on what the MLOps HS26 course teaches. When a file follows 
 
 | File | Based on | What I changed |
 |---|---|---|
-| `.github/workflows/ci.yml` | Block 1 exercise, Part D [5] | No model training step yet; runs the unit tests only |
+| `.github/workflows/ci.yml` | Block 1 exercise, Part D and the image job of its solution [5] | No model training step yet; runs the unit tests, then builds the image without publishing it |
 | `.github/workflows/feature-pipeline.yml` | Block 1 exercise, Parts A (DVC) and D (CI with uv) [5] | Runs on a schedule; pulls and pushes the data with DVC and commits the pointer files |
 | `pyproject.toml`, `uv.lock` | uv dependency management [4] | Own package layout under `src/lakegeneva/` |
+| `Dockerfile`, `.dockerignore` | Block 1 exercise, Part C (multi-stage image) [5] | Python 3.12 like the rest of the project, uv pinned to 0.13.0, our package copied to `/app/src`; no model, no HEALTHCHECK/EXPOSE (the feature pipeline is a job, not a web service); data mounted at run time |
 | `src/lakegeneva/features/ingest_bafu.py` | BAFU Data Platform API documentation [1] | Written for this project |
 | `src/lakegeneva/features/ingest_water.py` | existenz.ch Hydrology API documentation [2], BAFU Data Platform API documentation [1] (fallback and backfill) | Written for this project |
 | `src/lakegeneva/features/ingest_weather.py` | Open-Meteo Forecast API documentation [3] | Written for this project |
@@ -61,7 +62,7 @@ No code is copied from past student projects (mlops-lab.ch, KTH ID2223).
 [2] Existenz.ch (2026). Hydrology API (republished BAFU data). accessed on 01.10.2026 from api.existenz.ch
 [3] Open-Meteo (2026). Weather Forecast API. accessed on 20.10.2026 from open-meteo.com/en/docs
 [4] Bär, Florian (2026). Versioning and Containerization, MLOps HS26 Block 1, lecture slides. Lucerne University of Applied Sciences and Arts.
-[5] Bär, Florian (2026). Course project, Block 1: version the data, track the model, ship the service (exercise_quotes_1_version_and_ship), Part A: DVC, Part D: CI. MLOps HS26, Lucerne University of Applied Sciences and Arts.
+[5] Bär, Florian (2026). Course project, Block 1: version the data, track the model, ship the service (exercise_quotes_1_version_and_ship), Part A: DVC, Part C: Docker, Part D: CI. MLOps HS26, Lucerne University of Applied Sciences and Arts.
 [6] Open-Meteo (2026). Previous Runs API. accessed on 27.10.2026 from open-meteo.com/en/docs/previous-runs-api
 [7] pandas development team (2026). pandas documentation, version 3.1. accessed on 27.10.2026 from pandas.pydata.org/docs
 [8] Künsch, Hans R. (1989). The Jackknife and the Bootstrap for General Stationary Observations. The Annals of Statistics 17(3), 1217-1241.
