@@ -5,14 +5,15 @@ Predicts tomorrow's average water temperature of Lake Geneva at Geneva (BAFU sta
 Built as the MLOps HS26 semester project (HSLU) using the Feature / Training / Inference (FTI) pipeline architecture.
 
 ## Data sources
-- **Water:** FOEN/BAFU hydrology data via [api.existenz.ch](https://api.existenz.ch) (water temperature and flow, 10-min resolution). Fallback when existenz.ch does not answer: the same 10-min values from the official [BAFU Data Platform](https://data.bafu.admin.ch). History for training (backfill): the 10-min values and daily means back to 2016 from the same BAFU Data Platform.
+- **Water:** FOEN/BAFU hydrology data (water temperature and flow, 10-min resolution) from the official [BAFU Data Platform](https://data.bafu.admin.ch), the same source as the training history (backfill: 10-min values and daily means back to 2016). Fallback when BAFU does not answer: the same readings via [api.existenz.ch](https://api.existenz.ch) (the main source until 27.10.2026).
 - **Weather:** [Open-Meteo](https://open-meteo.com). The features use the Previous Runs API: for every hour, the forecast made 48 hours earlier, which always existed before the 18:00 cutoff (complete from 20.01.2024). The daily job also saves the newest forecast as an audit copy. Planned: the Single Runs API (the last forecast run published before 18:00), to compare with the 48-hour-old forecast.
 
 ## Where the data lives
 Data and models are never stored in Git; Git only holds code, configuration and small DVC pointer files. The only exception is a 4-day test sample of real BAFU readings in `tests/fixtures/` (22 KB), so that CI can test the feature code without the data.
 - **Raw data and features (MS2):** versioned with DVC [5]. The files are in the private Google Cloud Storage bucket `gs://lake-geneva-temp-data` (folder `dvc/`); Git holds only the pointer files `data/raw.dvc` (all raw downloads) and `data/features.dvc` (the feature table `features.parquet`, built by `src/lakegeneva/features/build_features.py`). Data versions are Git tags: `data-v1` = the raw data until 27.10.2026 and the first feature table.
 - **Get the data** (needs a key of the bucket's service account): `uv tool install "dvc[gs]"`, then `dvc remote modify --local storage credentialpath <path to the key>` and `dvc pull`. Without a key, the tests still run on the sample in `tests/fixtures/`.
-- **Until the daily job writes to GCS itself:** it still saves its daily snapshots in the [`raw-data` release](https://github.com/mariamicioni/lake-geneva-temp/releases/tag/raw-data) as a backup; the release is removed after the switch.
+- **Daily update:** the feature pipeline (`.github/workflows/feature-pipeline.yml`) runs every evening after the 18:00 cutoff: `dvc pull`, the new downloads, the whole feature table rebuilt, `dvc push`, and a commit of the two pointer files by `github-actions[bot]` ("chore(data): daily update ..."). So every day is one data version in Git, and every model can name the data it was trained on.
+- **Before 27.10.2026** the daily snapshots went to the [`raw-data` release](https://github.com/mariamicioni/lake-geneva-temp/releases/tag/raw-data) as a backup; all of them are in `data-v1`, and the release is no longer updated.
 - **Models:** MLflow tracking and model registry hosted on DagsHub (alias `champion` = model in production).
 
 ## Status
@@ -40,6 +41,7 @@ I build this project on what the MLOps HS26 course teaches. When a file follows 
 | File | Based on | What I changed |
 |---|---|---|
 | `.github/workflows/ci.yml` | Block 1 exercise, Part D [5] | No model training step yet; runs the unit tests only |
+| `.github/workflows/feature-pipeline.yml` | Block 1 exercise, Parts A (DVC) and D (CI with uv) [5] | Runs on a schedule; pulls and pushes the data with DVC and commits the pointer files |
 | `pyproject.toml`, `uv.lock` | uv dependency management [4] | Own package layout under `src/lakegeneva/` |
 | `src/lakegeneva/features/ingest_bafu.py` | BAFU Data Platform API documentation [1] | Written for this project |
 | `src/lakegeneva/features/ingest_water.py` | existenz.ch Hydrology API documentation [2], BAFU Data Platform API documentation [1] (fallback and backfill) | Written for this project |
