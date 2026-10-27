@@ -5,8 +5,8 @@ Predicts tomorrow's average water temperature of Lake Geneva at Geneva (BAFU sta
 Built as the MLOps HS26 semester project (HSLU) using the Feature / Training / Inference (FTI) pipeline architecture.
 
 ## Data sources
-- **Water:** FOEN/BAFU hydrology data via [api.existenz.ch](https://api.existenz.ch) (water temperature and flow, 10-min resolution). Fallback when existenz.ch does not answer: the same 10-min values from the official [BAFU Data Platform](https://data.bafu.admin.ch).
-- **Weather:** [Open-Meteo](https://open-meteo.com) forecast API; backfill from the Single Runs API (forecasts published before the 18:00 cutoff).
+- **Water:** FOEN/BAFU hydrology data via [api.existenz.ch](https://api.existenz.ch) (water temperature and flow, 10-min resolution). Fallback when existenz.ch does not answer: the same 10-min values from the official [BAFU Data Platform](https://data.bafu.admin.ch). History for training (backfill): the 10-min values and daily means back to 2016 from the same BAFU Data Platform.
+- **Weather:** [Open-Meteo](https://open-meteo.com). The features use the Previous Runs API: for every hour, the forecast made 48 hours earlier, which always existed before the 18:00 cutoff (complete from 20.01.2024). The daily job also saves the newest forecast as an audit copy. Planned: the Single Runs API (the last forecast run published before 18:00), to compare with the 48-hour-old forecast.
 
 ## Where the data lives
 Data and models are never stored in Git; Git only holds code, configuration and small DVC pointer files.
@@ -41,8 +41,9 @@ I build this project on what the MLOps HS26 course teaches. When a file follows 
 | `.github/workflows/ci.yml` | Block 1 exercise, Part D [5] | No model training step yet; runs the unit tests only |
 | `pyproject.toml`, `uv.lock` | uv dependency management [4] | Own package layout under `src/lakegeneva/` |
 | `src/lakegeneva/features/ingest_bafu.py` | BAFU Data Platform API documentation [1] | Written for this project |
-| `src/lakegeneva/features/ingest_water.py` | existenz.ch Hydrology API documentation [2], BAFU Data Platform API documentation [1] (fallback) | Written for this project |
+| `src/lakegeneva/features/ingest_water.py` | existenz.ch Hydrology API documentation [2], BAFU Data Platform API documentation [1] (fallback and backfill) | Written for this project |
 | `src/lakegeneva/features/ingest_weather.py` | Open-Meteo Forecast API documentation [3] | Written for this project |
+| `src/lakegeneva/features/ingest_weather_runs.py` | Open-Meteo Previous Runs API documentation [6] | Written for this project |
 
 No code is copied from past student projects (mlops-lab.ch, KTH ID2223).
 
@@ -54,3 +55,4 @@ No code is copied from past student projects (mlops-lab.ch, KTH ID2223).
 [3] Open-Meteo (2026). Weather Forecast API. accessed on 20.10.2026 from open-meteo.com/en/docs
 [4] Bär, Florian (2026). Versioning and Containerization, MLOps HS26 Block 1, lecture slides. Lucerne University of Applied Sciences and Arts.
 [5] Bär, Florian (2026). Course project, Block 1: version the data, track the model, ship the service (exercise_quotes_1_version_and_ship), Part D: CI. MLOps HS26, Lucerne University of Applied Sciences and Arts.
+[6] Open-Meteo (2026). Previous Runs API. accessed on 27.10.2026 from open-meteo.com/en/docs/previous-runs-api
