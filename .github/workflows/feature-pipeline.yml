@@ -1,0 +1,116 @@
+# Based on the MLOps HS26 Block 1 exercise, Parts A (DVC) and D (CI with uv), F. Bär [5] in README.md.
+#
+# The feature pipeline, every evening on GitHub's machines: the "F" of the FTI
+# architecture runs on a schedule, not by hand. One run:
+#   1. gets the current data version from the GCS bucket (dvc pull),
+#   2. downloads the newest water readings and weather forecasts,
+#   3. rebuilds the whole feature table (src/lakegeneva/common/features.py),
+#   4. stores everything in the bucket (dvc push) and
+#   5. commits the two small pointer files, so every day is one data version in Git.
+name: Feature pipeline
+
+on:
+  schedule:
+    # Cron format: minute hour day-of-month month day-of-week, always in UTC.
+    # 19:00 UTC = 20:00 Swiss winter time, 21:00 summer time: after the 18:00
+    # cutoff plus the ~1.5 hours BAFU needs to publish its values (measured on
+    # 27.10.2026). GitHub often starts scheduled runs hours late; that does no
+    # harm, because every run rebuilds the table from time-stamped data and the
+    # 18:00 cutoff is in the code.
+    - cron: "0 19 * * *"
+  workflow_dispatch:        # allows a manual run from the Actions tab
+
+# Never two runs at the same time: a second run waits until the first one is done,
+# so two runs can never push two different data versions over each other.
+concurrency:
+  group: feature-pipeline
+  cancel-in-progress: false
+
+# The job commits the updated pointer files, so it needs write access to the repo.
+permissions:
+  contents: write
+
+jobs:
+  features:
+    runs-on: ubuntu-latest  # a fresh Linux machine from GitHub, deleted after the run
+    timeout-minutes: 30     # stop a hanging run (each download retry waits 60 s)
+    steps:
+      # 1. Copy the repository onto the machine: code and pointer files, no data.
+      #    fetch-depth: 0 gets the whole history, so step 9 can put its commit on
+      #    top of a commit I might push while the job is running.
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      # 2. uv installs Python and the exact package versions from uv.lock, without
+      #    the dev tools (pytest): the same packages the Docker image will have.
+      - uses: astral-sh/setup-uv@v10.2.0
+        with:
+          enable-cache: true
+      - name: Install the exact versions from uv.lock
+        run: uv sync --locked --no-dev
+
+      # 3. DVC as a separate tool (like in the course), with a fixed version.
+      - name: Install DVC
+        run: uv tool install "dvc[gs]==3.67.1"
+
+      # 4. The key of the bucket's service account comes from the GitHub secret
+      #    GCP_SA_KEY. It is written to a file in the machine's temp folder (deleted
+      #    after the run) and given to DVC with --local, as on my laptop, so it never
+      #    ends up in a committed file. GitHub hides the secret in the log.
+      - name: Give DVC the bucket key
+        env:
+          GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }}
+        run: |
+          printf '%s' "$GCP_SA_KEY" > "$RUNNER_TEMP/gcp-key.json"
+          dvc remote modify --local storage credentialpath "$RUNNER_TEMP/gcp-key.json"
+
+      # 5. Get the current data version from the bucket (all raw files + the table).
+      - name: Get the current data from the bucket
+        id: pull
+        run: dvc pull
+
+      # 6. Water: 10-minute readings of the last 7 days (BAFU first, existenz.ch as
+      #    fallback). The overlap with earlier runs is on purpose: a missed day is
+      #    filled in by the next run.
+      - name: Download the last 7 days of water readings
+        run: uv run --locked --no-dev python src/lakegeneva/features/ingest_water.py --days 7 --out data/raw
+
+      # 7. Weather: the 48-hour-old forecasts (the features use them) and a copy of
+      #    the newest forecast (audit only). They still run if the water download
+      #    failed, but only if step 5 worked.
+      - name: Download the 48-hour-old forecasts
+        if: always() && steps.pull.outcome == 'success'
+        run: uv run --locked --no-dev python src/lakegeneva/features/ingest_weather_runs.py --out data/raw
+      - name: Save the newest forecast (audit copy)
+        if: always() && steps.pull.outcome == 'success'
+        run: uv run --locked --no-dev python src/lakegeneva/features/ingest_weather.py --out data/raw
+
+      # 8. Rebuild the whole feature table from all raw files (about 2 seconds).
+      - name: Build the feature table
+        if: always() && steps.pull.outcome == 'success'
+        run: uv run --locked --no-dev python src/lakegeneva/features/build_features.py
+
+      # 9. Store the new data version: first the data into the bucket (dvc push),
+      #    then the pointer files into Git. In this order a pointer in Git never
+      #    points to data that is missing in the bucket. Only if step 5 worked:
+      #    without the old data, the new version would be almost empty.
+      #    A push with GitHub's built-in token never starts another workflow, so
+      #    the data commit does not trigger CI.
+      - name: Store the new data version
+        if: always() && steps.pull.outcome == 'success'
+        run: |
+          dvc add data/raw data/features
+          dvc push
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/raw.dvc data/features.dvc
+          # git diff --cached --quiet is "true" when nothing changed: then no commit.
+          if git diff --cached --quiet; then
+            echo "No new data, nothing to commit"
+          else
+            git commit -m "chore(data): daily update $(TZ=Europe/Zurich date +%Y-%m-%d)"
+            # If I pushed a commit while the job ran, put this one on top of it.
+            git pull --rebase origin main
+            git push origin HEAD:main
+          fi
