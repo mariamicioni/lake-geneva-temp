@@ -1,4 +1,5 @@
-# Based on the MLOps HS26 Block 1 exercise, Part D (CI with uv), F. Bär [5] in README.md.
+# Based on the MLOps HS26 Block 1 exercise, Part D (CI with uv, and the image job of
+# the finished solution), F. Bär [5] in README.md.
 #
 # CI = continuous integration: on every push, a fresh GitHub machine (not my
 # laptop) installs the project and runs the tests. If it works there, it does not
@@ -36,3 +37,34 @@ jobs:
       # 4. Run all tests in tests/. -v prints each test name with PASSED/FAILED.
       - name: Run the tests
         run: uv run pytest -v
+
+  # Second job: build the Docker image (Dockerfile) and check that it starts.
+  # needs: test - only when all tests passed.
+  image:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      # Buildx is Docker's builder; it is needed for the GitHub Actions cache below.
+      - uses: docker/setup-buildx-action@v4
+
+      # Build the image. cache-from/cache-to keep the layers between runs, so an
+      # unchanged package layer is not installed again. load: true keeps the image
+      # on this machine for the check below; push: false, because MS2 only needs
+      # the image to build - publishing it belongs to the deployment (MS4).
+      - uses: docker/build-push-action@v7
+        with:
+          context: .
+          load: true
+          push: false
+          tags: lake-geneva-features:ci
+          build-args: APP_VERSION=${{ github.sha }}  # the Git commit inside the image
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # The image starts, finds all its packages and our code, and knows its version.
+      - name: Check that the image starts
+        run: |
+          docker run --rm lake-geneva-features:ci python -m lakegeneva.features.build_features --help
+          docker run --rm lake-geneva-features:ci python -c "import os; print('image version:', os.environ['APP_VERSION'])"
