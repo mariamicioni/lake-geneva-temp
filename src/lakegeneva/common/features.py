@@ -4,7 +4,8 @@ The forecast is made every day at 18:00 Swiss time (the "issue day" D) for the m
 water temperature of the next day (D+1). Training and the live forecast both build
 their table with this file, so a feature can never be computed in two ways.
 
-So far: the water part, from the 10-minute readings of station 2606.
+Water part: from the 10-minute readings of station 2606 (ingest_water.py).
+Weather part: from the 48-hour-old Open-Meteo forecast (ingest_weather_runs.py).
 
     python src/lakegeneva/common/features.py    # builds the table from data/raw
 """
@@ -20,6 +21,7 @@ So far: the water part, from the 10-minute readings of station 2606.
 
 from pathlib import Path  # file paths that work on Windows and Linux
 
+import numpy as np  # cosine for the south-west wind component
 import pandas as pd  # tables: read the CSVs, group the readings by day
 
 # --- Settings -----------------------------------------------------------------
@@ -38,6 +40,26 @@ MIN_READINGS_D0 = 90
 WATER_FEATURES = ["water_mean_d0", "water_last", "water_mean_3d", "water_trend_3d", "flow_mean_d0"]
 # The column with the value we want to predict.
 LABEL = "label_water_mean_d1"
+
+# The four columns of the 48-hour-old forecast, as ingest_weather_runs.py saves them.
+TEMPERATURE = "temperature_2m_previous_day2"  # air temperature 2 m above ground (°C)
+SUNSHINE = "sunshine_duration_previous_day2"  # seconds of sunshine in the hour (0-3600)
+WIND_SPEED = "wind_speed_10m_previous_day2"  # wind speed 10 m above ground (km/h)
+WIND_DIRECTION = "wind_direction_10m_previous_day2"  # degrees the wind comes FROM
+# Wind from the south-west (225°) pushes the warm surface water towards the
+# north-east end of the lake, and cold deep water comes up at Geneva (upwelling,
+# Eawag; review point A3). Checked on 27.10.2026: from April to September the
+# south-west part of the wind goes with tomorrow's temperature change about twice
+# as strongly as the wind speed alone (correlation -0.29 vs -0.13).
+SOUTH_WEST = 225
+# A forecast day counts only with at least 20 of its 24 hours (the same 83 % as
+# the water rules). Open-Meteo gives 24 hours for every day, also on clock-change days.
+MIN_HOURS_FC = 20
+# The weather features: tomorrow's forecast, plus today's south-west wind
+# (upwelling needs some hours, so wind today can cool the water tomorrow).
+WEATHER_FEATURES = ["air_temp_fc_d1", "sunshine_fc_d1", "wind_max_fc_d1", "wind_sw_fc_d0", "wind_sw_fc_d1"]
+# All features of the model, in the order of the table.
+FEATURES = WATER_FEATURES + WEATHER_FEATURES
 
 
 def load_water(raw_dir: Path | str = "data/raw") -> pd.DataFrame:
@@ -123,12 +145,97 @@ def water_features(readings: pd.DataFrame) -> pd.DataFrame:
     return table
 
 
+def load_weather(raw_dir: Path | str = "data/raw") -> pd.DataFrame:
+    """Read all files of the 48-hour-old forecast into one table, one row per hour."""
+    # Only the 48-hour-old forecasts (weather_geneva_prev2_...). The daily snapshots
+    # of the newest forecast (weather_geneva_fetched_...) are an audit copy: they
+    # were downloaded after 18:00 and must never become features.
+    paths = sorted(Path(raw_dir).glob("weather_geneva_prev2_*.csv"))
+    if not paths:
+        raise FileNotFoundError(f"No forecast files (weather_geneva_prev2_*.csv) in {raw_dir}")
+    hours = pd.concat([pd.read_csv(path) for path in paths], ignore_index=True)
+    # time_local is already Swiss clock time (the download asked for Europe/Zurich),
+    # so it needs no time zone conversion, only text -> time stamp.
+    hours["time_local"] = pd.to_datetime(hours["time_local"])
+    hours["fetched_at_utc"] = pd.to_datetime(hours["fetched_at_utc"], utc=True)
+    # The same hour can be in several files (the daily runs overlap). Keep the
+    # newest download: sort by download time, then keep the last copy of each hour.
+    # A 48-hour-old forecast does not change, so this only makes the choice clear.
+    hours = hours.sort_values("fetched_at_utc").drop_duplicates(subset="time_local", keep="last")
+    return hours.sort_values("time_local").reset_index(drop=True)
+
+
+def weather_features(hours: pd.DataFrame) -> pd.DataFrame:
+    """Daily table: one row per issue day D with the forecast for tomorrow (and today's wind)."""
+    # The Swiss day each forecast hour belongs to (00:00 of that day).
+    day = hours["time_local"].dt.normalize()
+    # The south-west part of the wind in each hour (km/h). cos(0°) = 1: wind exactly
+    # from the south-west counts fully; cos(180°) = -1: wind from the north-east
+    # (the bise) counts negative; wind across the lake counts about 0. Each hour
+    # becomes a number first and only these numbers are averaged: averaging the
+    # angles themselves would be wrong (350° and 10° are both north, but their
+    # average is 180° = south).
+    angle = np.deg2rad(hours[WIND_DIRECTION] - SOUTH_WEST)
+    south_west = hours[WIND_SPEED] * np.cos(angle)
+    # An hour counts only if all four values exist (before 20.01.2024 sunshine and
+    # wind are missing in the 48-hour-old forecast).
+    complete_hour = hours[[TEMPERATURE, SUNSHINE, WIND_SPEED, WIND_DIRECTION]].notna().all(axis=1)
+
+    # One row per day with the daily values of the forecast.
+    per_hour = pd.DataFrame(
+        {
+            "temperature": hours[TEMPERATURE],
+            "sunshine": hours[SUNSHINE],
+            "wind_speed": hours[WIND_SPEED],
+            "south_west": south_west,
+            "complete": complete_hour,
+        }
+    )
+    per_day = per_hour.groupby(day).agg(
+        air_temp=("temperature", "mean"),  # mean air temperature of the day (°C)
+        sunshine_s=("sunshine", "sum"),  # seconds of sunshine in the whole day
+        wind_max=("wind_speed", "max"),  # strongest hourly wind of the day (km/h)
+        wind_sw=("south_west", "mean"),  # mean south-west push of the day (km/h)
+        n_hours=("complete", "sum"),  # hours with all four values
+    )
+    # One row for every calendar day, so that shift(-1) means "one day later".
+    days = pd.date_range(per_day.index.min(), per_day.index.max(), freq="D", name="date")
+    per_day = per_day.reindex(days)
+    # A forecast day with fewer than 20 complete hours gives empty values
+    # (where(..., axis=0) applies the yes/no of each day to all its columns).
+    usable = per_day["n_hours"] >= MIN_HOURS_FC
+    per_day = per_day[["air_temp", "sunshine_s", "wind_max", "wind_sw"]].where(usable, axis=0)
+
+    table = pd.DataFrame(index=days)
+    # Tomorrow's forecast: shift(-1) moves the values of day D+1 into the row of D.
+    table["air_temp_fc_d1"] = per_day["air_temp"].shift(-1)
+    table["sunshine_fc_d1"] = per_day["sunshine_s"].shift(-1) / 3600  # seconds -> hours
+    table["wind_max_fc_d1"] = per_day["wind_max"].shift(-1)
+    # Today's south-west wind uses all 24 hours of today, also those after 18:00:
+    # these are forecasts made 48 hours earlier, not measurements, so they are
+    # known at 18:00 (see ingest_weather_runs.py).
+    table["wind_sw_fc_d0"] = per_day["wind_sw"]
+    table["wind_sw_fc_d1"] = per_day["wind_sw"].shift(-1)
+    return table[WEATHER_FEATURES]
+
+
+def feature_table(raw_dir: Path | str = "data/raw") -> pd.DataFrame:
+    """The full daily table: water features, weather features and the label."""
+    water = water_features(load_water(raw_dir))
+    weather = weather_features(load_weather(raw_dir))
+    # join() matches the rows by date. how="left": every day of the water table
+    # stays; a day without a forecast simply has empty weather features.
+    table = water.join(weather, how="left")
+    # Fixed column order: the counts, the features, the label.
+    return table[["n_readings_d0", *FEATURES, "n_readings_d1", LABEL]]
+
+
 def main() -> None:
-    # Build the table from all raw water files and show the last days. The next
+    # Build the full table from all raw files and show the last days. The next
     # step saves it as Parquet (the feature store) instead of printing it.
-    table = water_features(load_water("data/raw"))
+    table = feature_table("data/raw")
     print(f"{len(table)} days, {table.index.min():%d.%m.%Y} to {table.index.max():%d.%m.%Y}")
-    print(table.tail(5).round(3).to_string())
+    print(table.tail(5).round(2).to_string())
 
 
 # Runs main() only when the file is started as a script, not when it is imported
