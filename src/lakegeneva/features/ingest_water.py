@@ -1,7 +1,8 @@
 """Download raw water readings of BAFU station 2606 (Lake Geneva outflow, Geneva).
 
-Daily run: one CSV snapshot of the last N days. Snapshots overlap on purpose, so a
-missed run loses nothing; duplicates are removed later in the feature pipeline.
+Daily run: one CSV snapshot of the last N days, from the BAFU Data Platform (with
+existenz.ch as fallback). Snapshots overlap on purpose, so a missed run loses
+nothing; duplicates are removed later in the feature pipeline.
 Backfill: the same 10-minute readings for any date range (--start/--end), from the
 BAFU Data Platform, because existenz.ch only keeps about 32 days:
 
@@ -13,12 +14,15 @@ Only uses the standard library, so it runs without installing anything.
 # What this file is for: the 10-minute readings (144 per day). The proposal's
 # features need them: "mean water temperature today until 18:00" and "last reading
 # before 18:00" cannot be computed from BAFU's full-day means (see ingest_bafu.py).
-# existenz.ch republishes the BAFU readings as a simple REST API, but only keeps
-# about 32 days, so the 10-minute history comes from the BAFU Data Platform (see
-# "Backfill" below); ingest_bafu.py adds the daily means back to 2016.
-# Fallback: existenz.ch is run privately with no uptime guarantee (it failed on
-# 19.10 and 21.10.2026). If it does not answer, the same 10-minute values are
-# taken from the official BAFU Data Platform, so the daily file is still written.
+# Main source (since 27.10.2026): the official BAFU Data Platform, the same source
+# as the 10-minute history (see "Backfill" below), so the live data and the
+# training data come from the same place. Its newest value is about 1.5 hours old
+# (measured on 27.10.2026), so the daily job runs well after the 18:00 cutoff.
+# Fallback: existenz.ch republishes the same BAFU readings as a simple REST API
+# (single readings instead of 10-minute means: on average 0.005-0.008 °C apart,
+# checked on 27.10.2026). It keeps only about 32 days and is run privately with no
+# uptime guarantee (it failed on 19.10 and 21.10.2026), so it is only the backup.
+# ingest_bafu.py adds the BAFU daily means back to 2016.
 # Backfill: the 18:00 features and the label rule (at least 120 of 144 readings)
 # need 10-minute readings for every training day, not only daily means. So the
 # history comes through this same script and is written in the same CSV format as
@@ -35,7 +39,8 @@ import urllib.request  # sends the HTTP request to the API
 from pathlib import Path  # file paths that work on Windows and Linux
 
 # --- Settings -----------------------------------------------------------------
-# "daterange" endpoint: all readings between a start and an end date.
+# Fallback source, existenz.ch: the "daterange" endpoint gives all readings
+# between a start and an end date.
 API_URL = "https://api.existenz.ch/apiv1/hydro/daterange"
 # Station 2606 = Rhône, Genève Halle de l'Île: where Lake Geneva flows out.
 STATION = "2606"
@@ -43,7 +48,7 @@ STATION = "2606"
 PARAMETERS = "temperature,flow"
 # Polite identification: tells the API owner who is calling.
 USER_AGENT = "lake-geneva-temp (student project, github.com/mariamicioni/lake-geneva-temp)"
-# Fallback source: the official BAFU Data Platform (GraphQL, no key, same API as
+# Main source: the official BAFU Data Platform (GraphQL, no key, same API as
 # ingest_bafu.py). BAFU parameter codes -> the names existenz.ch uses, so both
 # sources give the same dict and write_csv() does not need to know the source.
 BAFU_API_URL = "https://data.bafu.admin.ch/api"
@@ -87,11 +92,11 @@ def fetch(start: dt.date, end: dt.date) -> dict[int, dict[str, float]]:
 
 
 def fetch_bafu(start: dt.date, end: dt.date) -> dict[int, dict[str, float]]:
-    """Same as fetch(), but from the official BAFU Data Platform (the fallback)."""
+    """Same as fetch(), but from the official BAFU Data Platform (the main source)."""
     # data_10min_mean = one value per 10 minutes, the same times as existenz.ch.
-    # Checked on 21.10.2026: the temperature is identical; the flow differs by a
-    # few m³/s, because BAFU averages the 10 minutes and existenz.ch gives the
-    # single reading. Fine for a backup, the daily mean is almost the same.
+    # BAFU averages the 10 minutes, existenz.ch gives the single reading: the
+    # temperature differs by 0.005-0.008 °C on average, the flow by a few m³/s
+    # (checked on 21.10 and 27.10.2026).
     # The time window is from 00:00 UTC of start to 00:00 UTC of end (end excluded),
     # like the existenz.ch request. Note: {{ and }} produce literal { and } in an f-string.
     query = (
@@ -194,16 +199,17 @@ def main() -> None:
         # One file for the whole range, e.g. water_2606_10min_2016-01-01_to_2026-10-27.csv
         path = Path(args.out) / f"water_{STATION}_10min_{args.start}_to_{end}.csv"
     else:
-        # Daily run. The API treats enddate as 00:00 of that day, so ask until
-        # tomorrow to include today.
+        # Daily run, BAFU first (the same source as the training history, so no
+        # training-serving skew). Both APIs treat the end as 00:00 of that day, so
+        # ask until tomorrow to include today.
         start, end = today - dt.timedelta(days=args.days), today + dt.timedelta(days=1)
         try:
-            readings = fetch(start, end)
-        except (OSError, ValueError, KeyError) as error:
-            # existenz.ch failed 3 times: take the same readings from BAFU instead.
-            # The message shows up in the GitHub log, so we know which source was used.
-            print(f"existenz.ch failed ({error}), using the BAFU Data Platform instead")
             readings = fetch_bafu(start, end)
+        except (OSError, ValueError, KeyError, TypeError) as error:
+            # BAFU failed 3 times: take the same readings from existenz.ch instead.
+            # The message shows up in the GitHub log, so we know which source was used.
+            print(f"BAFU Data Platform failed ({error}), using existenz.ch instead")
+            readings = fetch(start, end)
         # One file per run, named after the download day, e.g. water_2606_fetched_2026-10-20.csv
         path = Path(args.out) / f"water_{STATION}_fetched_{today}.csv"
     if not readings:
