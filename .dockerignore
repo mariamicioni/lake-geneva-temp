@@ -1,0 +1,25 @@
+# Based on the MLOps HS26 Block 1 exercise, Part C, F. Bär [5] in README.md.
+# Keep the build context small and free of data and secrets: only pyproject.toml,
+# uv.lock and src/ are needed to build the image.
+# secrets and local settings (never into an image)
+.env
+.env.*
+.dvc
+# data and models (the data is mounted at run time)
+data
+*.csv
+*.parquet
+mlruns
+models
+# Python and tools
+.venv
+__pycache__
+*.pyc
+.pytest_cache
+# not needed in the image
+.git
+.github
+tests
+docs
+notebooks
+README.md
