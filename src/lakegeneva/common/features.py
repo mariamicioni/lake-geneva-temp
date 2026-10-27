@@ -53,7 +53,7 @@ WIND_DIRECTION = "wind_direction_10m_previous_day2"  # degrees the wind comes FR
 # as strongly as the wind speed alone (correlation -0.29 vs -0.13).
 SOUTH_WEST = 225
 # A forecast day counts only with at least 20 of its 24 hours (the same 83 % as
-# the water rules). Open-Meteo gives 24 hours for every day, also on clock-change days.
+# the water rules). Clock-change days have 23 or 25 hours and still pass.
 MIN_HOURS_FC = 20
 # The weather features: tomorrow's forecast, plus today's south-west wind
 # (upwelling needs some hours, so wind today can cool the water tomorrow).
@@ -154,21 +154,38 @@ def load_weather(raw_dir: Path | str = "data/raw") -> pd.DataFrame:
     if not paths:
         raise FileNotFoundError(f"No forecast files (weather_geneva_prev2_*.csv) in {raw_dir}")
     hours = pd.concat([pd.read_csv(path) for path in paths], ignore_index=True)
-    # time_local is already Swiss clock time (the download asked for Europe/Zurich),
-    # so it needs no time zone conversion, only text -> time stamp.
-    hours["time_local"] = pd.to_datetime(hours["time_local"])
     hours["fetched_at_utc"] = pd.to_datetime(hours["fetched_at_utc"], utc=True)
+    # Two file formats. Since 27.10.2026 the files hold UTC times (time_utc). The
+    # first files hold time_local: for those, Open-Meteo shifted ALL hours by the UTC
+    # offset that was valid at the moment of the download (+1 h in winter even for
+    # summer days, checked on 27.10.2026). That shift is undone with the offset at
+    # the download time, so every hour gets its real UTC time.
+    if "time_utc" in hours:
+        time_utc = pd.to_datetime(hours["time_utc"], utc=True)  # empty (NaT) in old files
+    else:
+        time_utc = pd.Series(pd.NaT, index=hours.index, dtype="datetime64[ns, UTC]")
+    if "time_local" in hours:
+        old = time_utc.isna() & hours["time_local"].notna()  # rows from the old files
+        fetched = hours["fetched_at_utc"]
+        # The offset in Switzerland at the download: Swiss clock time minus UTC (1 or 2 h).
+        offset = fetched.dt.tz_convert(TIMEZONE).dt.tz_localize(None) - fetched.dt.tz_localize(None)
+        shifted_back = (pd.to_datetime(hours["time_local"]) - offset).dt.tz_localize("UTC")
+        time_utc = time_utc.where(~old, shifted_back)
+    hours["time_utc"] = time_utc
+    # Swiss local time WITH summer time: this decides to which Swiss day an hour belongs.
+    hours["time_local"] = time_utc.dt.tz_convert(TIMEZONE)
     # The same hour can be in several files (the daily runs overlap). Keep the
     # newest download: sort by download time, then keep the last copy of each hour.
     # A 48-hour-old forecast does not change, so this only makes the choice clear.
-    hours = hours.sort_values("fetched_at_utc").drop_duplicates(subset="time_local", keep="last")
-    return hours.sort_values("time_local").reset_index(drop=True)
+    hours = hours.sort_values("fetched_at_utc").drop_duplicates(subset="time_utc", keep="last")
+    return hours.sort_values("time_utc").reset_index(drop=True)
 
 
 def weather_features(hours: pd.DataFrame) -> pd.DataFrame:
     """Daily table: one row per issue day D with the forecast for tomorrow (and today's wind)."""
-    # The Swiss day each forecast hour belongs to (00:00 of that day).
-    day = hours["time_local"].dt.normalize()
+    # The Swiss day each forecast hour belongs to, as a plain date (like in
+    # water_features: drop the time zone but keep the Swiss clock time, then 00:00).
+    day = hours["time_local"].dt.tz_localize(None).dt.normalize()
     # The south-west part of the wind in each hour (km/h). cos(0°) = 1: wind exactly
     # from the south-west counts fully; cos(180°) = -1: wind from the north-east
     # (the bise) counts negative; wind across the lake counts about 0. Each hour
