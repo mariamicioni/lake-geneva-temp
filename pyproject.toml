@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "Next-day water temperature forecast for Lake Geneva at Geneva"
 requires-python = ">=3.12"
 dependencies = [
+    "numpy>=2.5.4",
     "pandas>=3.1.0",
     "tzdata>=2026.5",
 ]
