@@ -83,21 +83,39 @@ def test_fetch_bafu_gives_the_same_shape_as_existenz(monkeypatch):
     }
 
 
-def test_main_falls_back_to_bafu_when_existenz_fails(monkeypatch, tmp_path):
-    # existenz.ch is "down": fetch() raises the error seen on GitHub on 21.10.2026.
-    def broken_fetch(start, end):
-        raise OSError("[Errno 101] Network is unreachable")
+def test_main_uses_bafu_first(monkeypatch, tmp_path):
+    # Both sources work: the daily run must take BAFU (the source of the training
+    # history) and never call existenz.ch.
+    def existenz_must_not_be_called(start, end):
+        raise AssertionError("existenz.ch was called although BAFU answered")
 
-    monkeypatch.setattr(ingest_water, "fetch", broken_fetch)
+    monkeypatch.setattr(ingest_water, "fetch", existenz_must_not_be_called)
     monkeypatch.setattr(ingest_water, "fetch_bafu", lambda start, end: {1760000000: {"temperature": 18.5}})
     # Pretend the script was started with these command-line options.
     monkeypatch.setattr("sys.argv", ["ingest_water.py", "--out", str(tmp_path)])
 
     ingest_water.main()
 
-    # The CSV was still written, with the reading from the fallback.
+    # The CSV holds the BAFU reading.
     [path] = tmp_path.glob("water_2606_fetched_*.csv")
     assert "2025-10-09T08:53:20+00:00,18.5," in path.read_text()
+
+
+def test_main_falls_back_to_existenz_when_bafu_fails(monkeypatch, tmp_path):
+    # BAFU is "down": fetch_bafu() raises a network error, like the one seen on
+    # GitHub on 21.10.2026 (then for existenz.ch).
+    def broken_bafu(start, end):
+        raise OSError("[Errno 101] Network is unreachable")
+
+    monkeypatch.setattr(ingest_water, "fetch_bafu", broken_bafu)
+    monkeypatch.setattr(ingest_water, "fetch", lambda start, end: {1760000000: {"temperature": 18.4}})
+    monkeypatch.setattr("sys.argv", ["ingest_water.py", "--out", str(tmp_path)])
+
+    ingest_water.main()
+
+    # The CSV was still written, with the reading from the fallback.
+    [path] = tmp_path.glob("water_2606_fetched_*.csv")
+    assert "2025-10-09T08:53:20+00:00,18.4," in path.read_text()
 
 
 def test_fetch_bafu_history_downloads_in_pieces_without_gaps(monkeypatch):
