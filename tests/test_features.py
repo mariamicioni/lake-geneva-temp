@@ -3,11 +3,12 @@
 # (.github/workflows/ci.yml). pytest finds every function whose name starts with
 # test_ and runs it; a test fails if one of its `assert` lines is false.
 #
-# Most tests build their own readings with known values, so the right answer can
-# be worked out by hand. The last test uses a small sample of real readings
+# Most tests build their own readings and forecasts with known values, so the right
+# answer can be worked out by hand. Two tests use a small sample of real readings
 # (tests/fixtures/water_2606_sample.csv: 27.-30.03.2026, from the BAFU backfill).
 from pathlib import Path
 
+import numpy as np  # cosine, to work out the expected wind value by hand
 import pandas as pd
 import pytest  # pytest.approx: compares decimal numbers with a tiny tolerance
 
@@ -140,3 +141,127 @@ def test_real_sample_around_the_clock_change():
     assert list(table["n_readings_d1"]) == [144, 138, 144, 0]
     # Every day of the real sample passes the 18:00 rule, so water_last always exists.
     assert table["water_last"].notna().all()
+
+
+# --- Weather part -------------------------------------------------------------------
+
+
+def forecast_hours(day: str, temperature=10.0, sunshine=1800.0, speed=10.0, direction=225.0) -> pd.DataFrame:
+    """24 hours of a fake 48-hour-old forecast for one day, as load_weather() returns them."""
+    return pd.DataFrame(
+        {
+            "fetched_at_utc": pd.Timestamp("2026-10-27 19:00", tz="UTC"),
+            "time_local": pd.date_range(day, periods=24, freq="h"),  # 00:00 to 23:00
+            features.TEMPERATURE: temperature,
+            features.SUNSHINE: sunshine,
+            features.WIND_SPEED: speed,
+            features.WIND_DIRECTION: direction,
+        }
+    )
+
+
+def test_weather_features_use_the_forecast_for_tomorrow():
+    # Today 5 °C without sun; tomorrow 12 °C, 30 minutes of sun in every hour and
+    # 10 km/h wind with one stronger hour at 15:00.
+    today = forecast_hours("2026-10-10", temperature=5.0, sunshine=0.0)
+    tomorrow = forecast_hours("2026-10-11", temperature=12.0, sunshine=1800.0)
+    tomorrow.loc[15, features.WIND_SPEED] = 40.0
+
+    row = features.weather_features(pd.concat([today, tomorrow], ignore_index=True)).loc[pd.Timestamp("2026-10-10")]
+
+    assert row["air_temp_fc_d1"] == 12.0  # tomorrow's mean, not today's 5 °C
+    assert row["sunshine_fc_d1"] == 12.0  # 24 hours x 1800 s = 12 hours of sun
+    assert row["wind_max_fc_d1"] == 40.0  # the strongest hour of tomorrow
+
+
+def test_south_west_component_of_the_wind():
+    # 20 km/h from the south-west (225°), the north-east (45°, the bise) and the
+    # south-east (135°, across the lake) on three days after 10.10.
+    hours = pd.concat(
+        [
+            forecast_hours("2026-10-10"),
+            forecast_hours("2026-10-11", speed=20.0, direction=225.0),
+            forecast_hours("2026-10-12", speed=20.0, direction=45.0),
+            forecast_hours("2026-10-13", speed=20.0, direction=135.0),
+        ],
+        ignore_index=True,
+    )
+
+    table = features.weather_features(hours)
+
+    # The forecast for tomorrow, seen from the day before:
+    assert table.loc[pd.Timestamp("2026-10-10"), "wind_sw_fc_d1"] == pytest.approx(20.0)  # from SW: full push
+    assert table.loc[pd.Timestamp("2026-10-11"), "wind_sw_fc_d1"] == pytest.approx(-20.0)  # from NE: negative
+    assert table.loc[pd.Timestamp("2026-10-12"), "wind_sw_fc_d1"] == pytest.approx(0.0, abs=1e-9)  # across: none
+    # Today's value is the same number in the row of the day itself.
+    assert table.loc[pd.Timestamp("2026-10-11"), "wind_sw_fc_d0"] == pytest.approx(20.0)
+
+
+def test_wind_directions_are_not_averaged_as_angles():
+    # Tomorrow the wind comes from 350° for 12 hours and from 10° for 12 hours:
+    # both are almost north. The average of the angles would be 180° (south), which
+    # would turn into a south-west push of about +7 km/h - the wrong sign.
+    tomorrow = forecast_hours("2026-10-11", speed=10.0, direction=350.0)
+    tomorrow.loc[12:, features.WIND_DIRECTION] = 10.0
+
+    table = features.weather_features(pd.concat([forecast_hours("2026-10-10"), tomorrow], ignore_index=True))
+
+    # Right: the mean of the hourly south-west parts, about -7 km/h (a north wind is
+    # partly a north-east wind, so it counts negative).
+    expected = 10 * (np.cos(np.deg2rad(350 - 225)) + np.cos(np.deg2rad(10 - 225))) / 2
+    assert table.loc[pd.Timestamp("2026-10-10"), "wind_sw_fc_d1"] == pytest.approx(expected)
+    assert expected < 0
+
+
+def test_forecast_day_with_missing_hours_gives_no_weather_features():
+    # Tomorrow has sunshine for only 19 of its 24 hours (one less than the rule's 20).
+    tomorrow = forecast_hours("2026-10-11")
+    tomorrow.loc[19:, features.SUNSHINE] = float("nan")
+
+    row = features.weather_features(pd.concat([forecast_hours("2026-10-10"), tomorrow], ignore_index=True)).loc[
+        pd.Timestamp("2026-10-10")
+    ]
+
+    # Every forecast for tomorrow is empty ...
+    assert row[["air_temp_fc_d1", "sunshine_fc_d1", "wind_max_fc_d1", "wind_sw_fc_d1"]].isna().all()
+    # ... but today's wind (a complete day) still exists.
+    assert row["wind_sw_fc_d0"] == pytest.approx(10.0)
+
+
+def test_load_weather_keeps_the_newest_download_and_ignores_the_snapshots(tmp_path):
+    header = (
+        "fetched_at_utc,time_local,temperature_2m_previous_day2,sunshine_duration_previous_day2,"
+        "wind_speed_10m_previous_day2,wind_direction_10m_previous_day2\n"
+    )
+    # The same hour (02.10 12:00) in two downloads, one day apart.
+    (tmp_path / "weather_geneva_prev2_2026-10-01_to_2026-10-02.csv").write_text(
+        header + "2026-10-01T19:00:00+00:00,2026-10-02T12:00,15.0,3600,10,225\n"
+    )
+    (tmp_path / "weather_geneva_prev2_2026-09-25_to_2026-10-03.csv").write_text(
+        header + "2026-10-02T19:00:00+00:00,2026-10-02T12:00,15.5,3600,10,225\n"
+    )
+    # A snapshot of the newest forecast (downloaded after 18:00): it must not be read.
+    (tmp_path / "weather_geneva_fetched_2026-10-02.csv").write_text(
+        "fetched_at_utc,time_local,temperature_2m\n2026-10-02T19:00:00+00:00,2026-10-02T12:00,99.0\n"
+    )
+
+    hours = features.load_weather(tmp_path)
+
+    # One hour, from the newer download (02.10), although its file comes first in
+    # name order; the 99 °C of the snapshot is not there.
+    assert list(hours[features.TEMPERATURE]) == [15.5]
+
+
+def test_feature_table_has_all_features_and_the_label(tmp_path):
+    # One raw folder with the real water sample and a fake forecast for the same days.
+    (tmp_path / "water_2606_sample.csv").write_text((FIXTURES / "water_2606_sample.csv").read_text())
+    hours = pd.concat([forecast_hours(f"2026-03-{d}") for d in range(27, 32)], ignore_index=True)
+    hours.to_csv(tmp_path / "weather_geneva_prev2_2026-03-27_to_2026-03-31.csv", index=False)
+
+    table = features.feature_table(tmp_path)
+
+    # The columns in their fixed order: counts, all features, label.
+    assert list(table.columns) == ["n_readings_d0", *features.FEATURES, "n_readings_d1", features.LABEL]
+    # One row per water day; 30.03 has its forecast for 31.03, so every feature exists.
+    assert len(table) == 4
+    assert table.loc[pd.Timestamp("2026-03-30"), features.FEATURES].notna().all()
