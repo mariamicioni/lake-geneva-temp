@@ -49,11 +49,13 @@ USER_AGENT = "lake-geneva-temp (student project, github.com/mariamicioni/lake-ge
 def fetch(start: dt.date, end: dt.date) -> dict:
     """Return the hourly 48-hour-old forecast from start to end (both days included)."""
     # REST API: everything we want is in the URL.
-    # timezone=Europe/Zurich: times come back in Swiss local time, so a "day" is the
-    # Swiss calendar day, the same as in ingest_weather.py.
+    # timezone=GMT: the times come back in UTC, like the water readings. (With
+    # timezone=Europe/Zurich, Open-Meteo shifts ALL hours by the offset that is valid
+    # at the moment of the request - +1 h in winter even for summer days, checked on
+    # 27.10.2026.) features.py converts UTC to Swiss time, with summer time.
     url = (
         f"{API_URL}?latitude={LATITUDE}&longitude={LONGITUDE}"
-        f"&hourly={','.join(COLUMNS)}&start_date={start}&end_date={end}&timezone=Europe/Zurich"
+        f"&hourly={','.join(COLUMNS)}&start_date={start}&end_date={end}&timezone=GMT"
     )
     # Try a few times in case the API is briefly unavailable.
     for attempt in range(1, 4):  # attempts 1, 2 and 3
@@ -79,11 +81,11 @@ def write_csv(hourly: dict, fetched_at: dt.datetime, path: Path) -> None:
     # newline="" stops Windows from writing an empty line after every row.
     with open(path, "w", newline="") as f:
         writer = csv.writer(f)
-        writer.writerow(["fetched_at_utc", "time_local", *COLUMNS])
-        # One row per hour. A missing value (None, e.g. sunshine before 20.01.2024)
-        # becomes an empty cell, so it stays visibly empty instead of 0.
-        for i, time_local in enumerate(hourly["time"]):
-            writer.writerow([fetched_at.isoformat(timespec="seconds"), time_local, *(hourly[c][i] for c in COLUMNS)])
+        writer.writerow(["fetched_at_utc", "time_utc", *COLUMNS])
+        # One row per hour (in UTC). A missing value (None, e.g. sunshine before
+        # 20.01.2024) becomes an empty cell, so it stays visibly empty instead of 0.
+        for i, time_utc in enumerate(hourly["time"]):
+            writer.writerow([fetched_at.isoformat(timespec="seconds"), time_utc, *(hourly[c][i] for c in COLUMNS)])
 
 
 def main() -> None:
@@ -100,7 +102,8 @@ def main() -> None:
     # features can take the value from the newest file.
     now = dt.datetime.now(dt.timezone.utc)
     # Defaults for the daily run: tomorrow (the day we predict) and the 7 days
-    # before today. A 48-hour-old forecast is never changed afterwards, so the
+    # before today, as UTC days (tomorrow's Swiss day ends at 22:00 or 23:00 UTC,
+    # so it is inside). A 48-hour-old forecast is never changed afterwards, so the
     # overlap with earlier runs is harmless and fills in a missed day.
     end = args.end or now.date() + dt.timedelta(days=1)
     start = args.start or now.date() - dt.timedelta(days=7)
