@@ -8,7 +8,11 @@ venv/
 .ipynb_checkpoints/
 .pytest_cache/
 # data & models (never in git)
-data/
+# data/ is not listed here: DVC writes data/.gitignore for the folders it tracks
+# (raw, features), so Git keeps only the small pointer files data/*.dvc and the
+# data itself stays in the GCS bucket. (A "data/*" rule here makes DVC on Windows
+# skip the whole data folder - checked on 27.10.2026.) The CSV and Parquet rules
+# below stay as a second safety net.
 *.parquet
 *.csv
 # ... except the small test sample (4 days of real BAFU readings) used by the tests
