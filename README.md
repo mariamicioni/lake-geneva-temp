@@ -10,8 +10,9 @@ Built as the MLOps HS26 semester project (HSLU) using the Feature / Training / I
 
 ## Where the data lives
 Data and models are never stored in Git; Git only holds code, configuration and small DVC pointer files. The only exception is a 4-day test sample of real BAFU readings in `tests/fixtures/` (22 KB), so that CI can test the feature code without the data.
-- **Now (MS1):** a daily GitHub Actions job (`.github/workflows/collect-water.yml`) saves raw CSV snapshots as a temporary backup in the [`raw-data` release](https://github.com/mariamicioni/lake-geneva-temp/releases/tag/raw-data), which is outside the Git history.
-- **From MS2:** the job writes raw data and features to Google Cloud Storage, versioned with DVC; the GitHub Release is then removed.
+- **Raw data and features (MS2):** versioned with DVC [5]. The files are in the private Google Cloud Storage bucket `gs://lake-geneva-temp-data` (folder `dvc/`); Git holds only the pointer files `data/raw.dvc` (all raw downloads) and `data/features.dvc` (the feature table `features.parquet`, built by `src/lakegeneva/features/build_features.py`). Data versions are Git tags: `data-v1` = the raw data until 27.10.2026 and the first feature table.
+- **Get the data** (needs a key of the bucket's service account): `uv tool install "dvc[gs]"`, then `dvc remote modify --local storage credentialpath <path to the key>` and `dvc pull`. Without a key, the tests still run on the sample in `tests/fixtures/`.
+- **Until the daily job writes to GCS itself:** it still saves its daily snapshots in the [`raw-data` release](https://github.com/mariamicioni/lake-geneva-temp/releases/tag/raw-data) as a backup; the release is removed after the switch.
 - **Models:** MLflow tracking and model registry hosted on DagsHub (alias `champion` = model in production).
 
 ## Status
@@ -45,6 +46,8 @@ I build this project on what the MLOps HS26 course teaches. When a file follows 
 | `src/lakegeneva/features/ingest_weather.py` | Open-Meteo Forecast API documentation [3] | Written for this project |
 | `src/lakegeneva/features/ingest_weather_runs.py` | Open-Meteo Previous Runs API documentation [6] | Written for this project |
 | `src/lakegeneva/common/features.py` | The features of my proposal (`docs/proposal.pdf`), pandas documentation [7] | Written for this project |
+| `src/lakegeneva/features/build_features.py` | pandas documentation [7] (Parquet) | Written for this project |
+| `.dvc/config`, `data/raw.dvc`, `data/features.dvc` | Block 1 exercise, Part A (version the data with DVC) [5] | Google Cloud Storage instead of the local S3 bucket; the key path only in `.dvc/config.local` (not in Git) |
 | `src/lakegeneva/common/baselines.py` | Trend-adjusted persistence and bootstrap interval suggested in the MS1 reviews (A1, A2/B2); moving-block bootstrap [8] | Written for this project |
 
 No code is copied from past student projects (mlops-lab.ch, KTH ID2223).
@@ -56,7 +59,7 @@ No code is copied from past student projects (mlops-lab.ch, KTH ID2223).
 [2] Existenz.ch (2026). Hydrology API (republished BAFU data). accessed on 01.10.2026 from api.existenz.ch
 [3] Open-Meteo (2026). Weather Forecast API. accessed on 20.10.2026 from open-meteo.com/en/docs
 [4] Bär, Florian (2026). Versioning and Containerization, MLOps HS26 Block 1, lecture slides. Lucerne University of Applied Sciences and Arts.
-[5] Bär, Florian (2026). Course project, Block 1: version the data, track the model, ship the service (exercise_quotes_1_version_and_ship), Part D: CI. MLOps HS26, Lucerne University of Applied Sciences and Arts.
+[5] Bär, Florian (2026). Course project, Block 1: version the data, track the model, ship the service (exercise_quotes_1_version_and_ship), Part A: DVC, Part D: CI. MLOps HS26, Lucerne University of Applied Sciences and Arts.
 [6] Open-Meteo (2026). Previous Runs API. accessed on 27.10.2026 from open-meteo.com/en/docs/previous-runs-api
 [7] pandas development team (2026). pandas documentation, version 3.1. accessed on 27.10.2026 from pandas.pydata.org/docs
 [8] Künsch, Hans R. (1989). The Jackknife and the Bootstrap for General Stationary Observations. The Annals of Statistics 17(3), 1217-1241.
