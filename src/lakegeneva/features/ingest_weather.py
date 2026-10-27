@@ -39,11 +39,12 @@ USER_AGENT = "lake-geneva-temp (student project, github.com/mariamicioni/lake-ge
 def fetch() -> dict:
     # REST API: everything we want is in the URL.
     # forecast_days=3: today, tomorrow (the day we predict) and the day after.
-    # timezone=Europe/Zurich: times come back in Swiss local time, so "tomorrow"
-    # means the Swiss calendar day.
+    # timezone=GMT: times in UTC, like all raw data (see ingest_weather_runs.py for
+    # why not Europe/Zurich). Files before 27.10.2026 have "time_local" instead:
+    # Swiss clock time with the offset that was valid at the download.
     url = (
         f"{API_URL}?latitude={LATITUDE}&longitude={LONGITUDE}"
-        f"&hourly={','.join(VARIABLES)}&forecast_days=3&timezone=Europe/Zurich"
+        f"&hourly={','.join(VARIABLES)}&forecast_days=3&timezone=GMT"
     )
     # Try a few times in case the API is briefly unavailable.
     for attempt in range(1, 4):  # attempts 1, 2 and 3
@@ -80,10 +81,10 @@ def main() -> None:
     # newline="" stops Windows from writing an empty line after every row.
     with open(path, "w", newline="") as f:
         writer = csv.writer(f)
-        writer.writerow(["fetched_at_utc", "time_local", *VARIABLES])
-        # One row per forecast hour (3 days x 24 hours = 72 rows).
-        for i, time_local in enumerate(hourly["time"]):
-            writer.writerow([now.isoformat(timespec="seconds"), time_local, *(hourly[v][i] for v in VARIABLES)])
+        writer.writerow(["fetched_at_utc", "time_utc", *VARIABLES])
+        # One row per forecast hour (3 days x 24 hours = 72 rows), in UTC.
+        for i, time_utc in enumerate(hourly["time"]):
+            writer.writerow([now.isoformat(timespec="seconds"), time_utc, *(hourly[v][i] for v in VARIABLES)])
     print(f"Saved {len(hourly['time'])} forecast hours to {path}")
 
 
