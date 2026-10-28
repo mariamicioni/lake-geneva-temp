@@ -55,7 +55,6 @@ Data and models are never stored in Git; Git only holds code, configuration and 
 - **Raw data and features (MS2):** versioned with DVC [5]. The files are in the private Google Cloud Storage bucket `gs://lake-geneva-temp-data` (folder `dvc/`); Git holds only the pointer files `data/raw.dvc` (all raw downloads) and `data/features.dvc` (the feature table `features.parquet`, built by `src/lakegeneva/features/build_features.py`). Data versions are Git tags: `data-v1` = the raw data until 27.10.2026 and the first feature table.
 - **Get the data** (needs a key of the bucket's service account): see "How to run" below. Without a key, the tests still run on the sample in `tests/fixtures/`.
 - **Daily update:** the feature pipeline commits the two pointer files as `github-actions[bot]` ("chore(data): daily update ..."). So every day is one data version in Git, and every model can name the data it was trained on.
-- **Before 27.10.2026** the daily snapshots went to the [`raw-data` release](https://github.com/mariamicioni/lake-geneva-temp/releases/tag/raw-data) as a backup; all of them are in `data-v1`, and the release is no longer updated.
 - **Models:** MLflow tracking and model registry hosted on DagsHub (alias `champion` = model in production).
 
 ## How to run
