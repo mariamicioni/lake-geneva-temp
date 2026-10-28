@@ -141,7 +141,14 @@ def water_features(readings: pd.DataFrame) -> pd.DataFrame:
     # a feature, and it is empty while tomorrow is not over yet.
     table["n_readings_d1"] = whole_day["count"].shift(-1).fillna(0).astype(int)
     tomorrow_mean = (whole_day["sum"] / whole_day["count"]).shift(-1)
-    table[LABEL] = tomorrow_mean.where(table["n_readings_d1"] >= MIN_READINGS_LABEL)
+    # Tomorrow is over when the data reaches its last 10-minute slot (23:50 Swiss
+    # time) or later. Counting the readings alone is not enough: the job of 27.10.2026
+    # started at 23:52 and already had 126 readings of a day that was not over yet.
+    # table.index + 2 days = 00:00 at the end of tomorrow; tz_localize puts it on the
+    # Swiss clock (00:00 always exists, the clocks change at 02:00 or 03:00).
+    end_of_tomorrow = (table.index + pd.Timedelta(days=2)).tz_localize(TIMEZONE)
+    tomorrow_over = end_of_tomorrow - pd.Timedelta(minutes=10) <= local.max()
+    table[LABEL] = tomorrow_mean.where((table["n_readings_d1"] >= MIN_READINGS_LABEL) & tomorrow_over)
     return table
 
 
