@@ -74,6 +74,17 @@ def test_report_compares_both_baselines_on_the_same_days():
     assert result.loc["all features, change > 0.8", "days"] == 0
 
 
+def test_report_counts_only_the_test_days_from_21_01_2025():
+    # 20 days from 11.01.2025: 10 days of the validation year (11.-20.01.) and
+    # 10 test days (21.-30.01.). Only the test days count for the target.
+    result = baselines.report(feature_rows(20, start="2025-01-11"))
+
+    assert result.loc["test, all year", "days"] == 10
+    assert result.loc["test, all year", "first_day"] == pd.Timestamp("2025-01-21").date()
+    # The windows over all days with all features still see all 20 days.
+    assert result.loc["all features, all year", "days"] == 20
+
+
 def test_report_gives_no_interval_for_a_handful_of_days():
     # 10 of the 60 days change by 1 °C: too few days (under 35) for an interval.
     table = feature_rows(60)
