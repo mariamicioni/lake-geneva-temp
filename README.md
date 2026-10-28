@@ -16,19 +16,19 @@ Built as the MLOps HS26 semester project (HSLU) with the Feature / Training / In
 
 ## Goal and success criterion
 At 18:00 on day D the model predicts the mean water temperature of D+1 (6 to 30 hours ahead). The model succeeds if its MAE is **at least 20 % lower than the MAE of the stronger baseline, on the same days**:
-- **Main target:** all days with all features, from 21.01.2024 on (walk-forward evaluation in MS3).
-- **Target on the big-change days:** the days on which the temperature changes by more than 0.8 °C, where persistence fails.
-- **Reported, not a target:** October–January (only 8 big-change days since 2024, and there plain and trend-adjusted persistence are equally good) and the live period October 2026 – January 2027 (monitoring in MS4).
+- **Main target:** the test days from 21.01.2025 on. For each test day the model is trained again on all days before it (walk-forward evaluation in MS3). The first year with all features (21.01.2024–20.01.2025, 366 days) is for validation: it is used to choose the model settings and never counts for the target.
+- **Target on the big-change days:** the test days on which the temperature changes by more than 0.8 °C, where persistence fails.
+- **Reported, not a target:** October–January (only 6 big-change test days, and there plain and trend-adjusted persistence are equally good) and the live period October 2026 – January 2027 (monitoring in MS4).
 
 The stronger baseline is plain persistence, the last reading before 18:00. Trend-adjusted persistence (the last reading plus a third of the 3-day trend, suggested in the MS1 reviews) is worse:
 
-| Days (from 21.01.2024, 18:00 cutoff) | Days | Persistence MAE | Trend-adjusted MAE | Target MAE (−20 %) |
+| Test days (21.01.2025–25.10.2026, 18:00 cutoff) | Days | Persistence MAE | Trend-adjusted MAE | Target MAE (−20 %) |
 |---|---|---|---|---|
-| all days | 1,009 | 0.522 °C | 0.730 °C | ≤ 0.418 °C |
-| change > 0.8 °C | 166 | 1.881 °C | 2.141 °C | ≤ 1.505 °C |
-| October–January (reported) | 282 | 0.232 °C | 0.246 °C | (0.185 °C) |
+| all test days | 643 | 0.532 °C | 0.722 °C | ≤ 0.425 °C |
+| change > 0.8 °C | 100 | 1.921 °C | 2.095 °C | ≤ 1.537 °C |
+| October–January (reported) | 159 | 0.276 °C | 0.279 °C | (0.221 °C) |
 
-Numbers of 27.10.2026; `python src/lakegeneva/common/baselines.py` recomputes them with 95 % bootstrap intervals [8]. The criterion changed since the proposal; `docs/ms2_summary.pdf` explains why (MS1 review points A1, A2/B2, B3).
+Numbers of 27.10.2026 (every new day adds one test day); `python src/lakegeneva/common/baselines.py` recomputes them with 95 % bootstrap intervals [8]. The criterion changed since the proposal; `docs/ms2_summary.pdf` explains why (MS1 review points A1, A2/B2, B3).
 
 ## Related work and what is different here
 - **KTH ID2223 2025/26, "Water Temperature at Södertälje"** [10]: predicts the water temperature at bathing sites in Södertälje from municipality open data and Open-Meteo forecasts.
@@ -48,7 +48,7 @@ Every evening (`.github/workflows/feature-pipeline.yml`, 19:00 UTC):
 3. `build_features.py` rebuilds the whole daily feature table with the one shared feature definition in `src/lakegeneva/common/features.py` and saves it as `data/features/features.parquet`.
 4. `dvc push` stores the data in the bucket, and the job commits the two pointer files: one data version per day.
 
-The rules that prevent leakage: every day is a Swiss calendar day (with summer time); the water features use only readings before 18:00 Swiss time, the weather features only forecasts made 48 hours earlier; the label (tomorrow's mean) needs at least 120 of the 144 readings. All columns, units and gap rules: [`DATACARD.md`](DATACARD.md).
+The rules that prevent leakage: every day is a Swiss calendar day (with summer time); the water features use only readings before 18:00 Swiss time, the weather features only forecasts made 48 hours earlier; the label (tomorrow's mean) needs at least 120 of the 144 readings, and tomorrow must be over. All columns, units and gap rules: [`DATACARD.md`](DATACARD.md).
 
 ## Where the data lives
 Data and models are never stored in Git; Git only holds code, configuration and small DVC pointer files. The only exception is a 4-day test sample of real BAFU readings in `tests/fixtures/` (22 KB), so that CI can test the feature code without the data.
