@@ -66,13 +66,28 @@ def test_readings_after_18_00_do_not_change_the_features():
 def test_label_needs_at_least_120_readings_of_tomorrow():
     today = swiss_day("2026-10-10", value=15.0)
     tomorrow = swiss_day("2026-10-11", value=14.0)
-    # iloc[:n] keeps only the first n readings of tomorrow.
-    few = features.water_features(pd.concat([today, tomorrow.iloc[:119]], ignore_index=True))
-    enough = features.water_features(pd.concat([today, tomorrow.iloc[:120]], ignore_index=True))
+    # iloc[-n:] keeps only the last n readings of tomorrow: a gap in the night, but
+    # the day is over (its 23:50 reading exists).
+    few = features.water_features(pd.concat([today, tomorrow.iloc[-119:]], ignore_index=True))
+    enough = features.water_features(pd.concat([today, tomorrow.iloc[-120:]], ignore_index=True))
 
     day = pd.Timestamp("2026-10-10")
     assert pd.isna(few.loc[day, features.LABEL])  # 119 readings: no label
     assert enough.loc[day, features.LABEL] == 14.0  # 120 readings: the mean of tomorrow
+
+
+def test_label_waits_until_tomorrow_is_over():
+    # Like the job of 27.10.2026 that started at 23:52: tomorrow already has 132
+    # readings (00:00 to 21:50), more than 120, but the day is not over yet.
+    today = swiss_day("2026-10-10", value=15.0)
+    tomorrow = swiss_day("2026-10-11", value=14.0)
+    not_over = features.water_features(pd.concat([today, tomorrow.iloc[:132]], ignore_index=True))
+    # The next evening the whole day is there.
+    over = features.water_features(pd.concat([today, tomorrow], ignore_index=True))
+
+    day = pd.Timestamp("2026-10-10")
+    assert pd.isna(not_over.loc[day, features.LABEL])  # not over: no label yet
+    assert over.loc[day, features.LABEL] == 14.0  # over: the mean of all of 11.10
 
 
 def test_three_day_mean_and_trend():
