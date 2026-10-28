@@ -25,6 +25,11 @@ BIG_CHANGE = 0.8
 # Success criterion: at least 20 % lower MAE than the stronger baseline, on the
 # same days.
 TARGET_GAIN = 0.20
+# The test days (review point A1): the first year with all features (21.01.2024
+# to 20.01.2025) is for validation, to choose the model settings in MS3, so it
+# never counts for the target. Only the days from here on count, and on each of
+# them the model is trained again on all days before it (walk-forward).
+TEST_START = pd.Timestamp("2025-01-21")
 # Bootstrap: blocks of 7 days, 2,000 new test sets, a fixed seed (the same
 # interval on every run).
 BLOCK_DAYS = 7
@@ -87,7 +92,14 @@ def report(table: pd.DataFrame) -> pd.DataFrame:
     forecast_month = (table.index + pd.Timedelta(days=1)).month
     oct_jan = pd.Series(forecast_month.isin([10, 11, 12, 1]), index=table.index)
     big = big_change_days(table)
+    # The days that count for the success criterion: all features, from TEST_START on.
+    test = all_features & (table.index >= TEST_START)
     windows = {
+        "test, all year": test,
+        "test, Oct-Jan": test & oct_jan,
+        "test, change > 0.8": test & big,
+        "test, Oct-Jan, change > 0.8": test & oct_jan & big,
+        # The same windows over all days with all features (validation year included).
         "all features, all year": all_features,
         "all features, Oct-Jan": all_features & oct_jan,
         "all features, change > 0.8": all_features & big,
