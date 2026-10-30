@@ -64,7 +64,10 @@ jobs:
           cache-to: type=gha,mode=max
 
       # The image starts, finds all its packages and our code, and knows its version.
+      # run_pipeline is the default command of the image. --help loads all five steps
+      # but downloads nothing, so a wrong name fails here and CI needs no API.
       - name: Check that the image starts
         run: |
+          docker run --rm lake-geneva-features:ci python -m lakegeneva.features.run_pipeline --help
           docker run --rm lake-geneva-features:ci python -m lakegeneva.features.build_features --help
           docker run --rm lake-geneva-features:ci python -c "import os; print('image version:', os.environ['APP_VERSION'])"
