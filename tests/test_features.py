@@ -145,6 +145,23 @@ def test_load_water_reads_all_files_and_keeps_the_newest_duplicate(tmp_path):
     assert readings["time_local"].iloc[0] == pd.Timestamp("2026-10-01 12:00", tz="Europe/Zurich")
 
 
+def test_load_water_does_not_lose_a_value_when_the_newer_file_has_a_gap(tmp_path):
+    # The same time in two files. The newer file has the temperature but no flow.
+    (tmp_path / "water_2606_10min_2026-10-01_to_2026-10-01.csv").write_text(
+        "time_utc,water_temp_c,flow_m3s\n2026-10-01T10:00:00+00:00,18.50,200.0\n"
+    )
+    (tmp_path / "water_2606_fetched_2026-10-02.csv").write_text(
+        "time_utc,water_temp_c,flow_m3s\n2026-10-01T10:00:00+00:00,18.45,\n"
+    )
+
+    readings = features.load_water(tmp_path)
+
+    # One row: the newest temperature, and the flow from the older file.
+    assert len(readings) == 1
+    assert readings["water_temp_c"].iloc[0] == 18.45
+    assert readings["flow_m3s"].iloc[0] == 200.0
+
+
 def test_real_sample_around_the_clock_change():
     # Real BAFU readings of 27.-30.03.2026, read the same way as the full data.
     table = features.water_features(features.load_water(FIXTURES))
