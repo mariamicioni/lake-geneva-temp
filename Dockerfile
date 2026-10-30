@@ -2,7 +2,8 @@
 #
 # The feature pipeline as a container image: the same code and the exact package
 # versions from uv.lock, on any machine with Docker. The image holds no data and
-# no keys: the data is mounted from outside (see "Run").
+# no keys: a run downloads the newest data from public APIs, or the real data is
+# mounted from outside (see "Run").
 #
 #   builder  python:3.12-slim + uv. The package layer depends only on pyproject.toml
 #            and uv.lock, so Docker reuses it as long as the dependencies are the same.
@@ -10,10 +11,14 @@
 #            code - no uv, no pytest, no build tools.
 #
 # Build:   docker build -t lake-geneva-features .
-# Run:     docker run --rm -v "${PWD}/data:/app/data" lake-geneva-features
-#          (rebuilds data/features/features.parquet from the raw files in data/raw)
-# Other steps of the pipeline, e.g. the water download:
-#          docker run --rm -v "${PWD}/data:/app/data" lake-geneva-features python -m lakegeneva.features.ingest_water --out /app/data/raw
+# Run:     docker run --rm lake-geneva-features
+#          (the whole pipeline, no key needed: downloads the last 7 days and builds
+#          the table. The files stay in the container and are deleted with it.)
+# Only the table, from the real raw files (after dvc pull): data/raw is mounted
+# read-only and the new table goes to out/, so the stored table stays as it is:
+#          docker run --rm -v "${PWD}/data/raw:/app/data/raw:ro" -v "${PWD}/out:/app/data/features" lake-geneva-features python -m lakegeneva.features.build_features
+# On Linux the user in the container must be allowed to write to out/:
+#          mkdir -p out, then add --user "$(id -u):$(id -g)" after --rm
 
 # ---- builder: install the exact package versions ---------------------------
 # Python 3.12, the same version as .python-version (local, CI and the daily job).
@@ -39,8 +44,12 @@ FROM python:3.12-slim
 # Which version of the code is inside: CI passes the Git commit (see ci.yml).
 ARG APP_VERSION=dev
 # PYTHONPATH: where Python finds the packages and our package "lakegeneva".
+# PYTHONUNBUFFERED=1 (like the Block 3 exercise, F. Bär [12] in README.md): Python
+# prints each message at once. Without it, Python holds the messages back until a
+# step ends, so during a 60-second retry wait the screen stays empty.
 ENV APP_VERSION=$APP_VERSION \
-    PYTHONPATH=/app/deps:/app/src
+    PYTHONPATH=/app/deps:/app/src \
+    PYTHONUNBUFFERED=1
 
 # A normal user instead of root: if the code had a security hole, it could not
 # change the system inside the container.
@@ -49,12 +58,16 @@ RUN groupadd --gid 1001 app && useradd --uid 1001 --gid app --no-create-home app
 WORKDIR /app
 COPY --from=builder --chown=app:app /app/deps /app/deps
 COPY --chown=app:app src/ /app/src/
-# The data folder is mounted at run time; it only has to exist and belong to the user.
+# The pipeline writes its files here, so the folder must exist and belong to the
+# user. A folder with the real data can be mounted over it at run time.
 RUN mkdir -p /app/data && chown app:app /app/data
 
 USER 1001
 
 # No HEALTHCHECK and no EXPOSE: the feature pipeline is a job that runs and ends,
 # not a web service that waits for requests (the web app comes with MS4).
+# The default command: the same download and build steps as the daily job, but
+# without DVC and the bucket, so nobody needs a key (see run_pipeline.py). The
+# table holds only the downloaded days; the daily job first gets the whole history.
 # Exec form (a list): the command runs directly, without a shell in between.
-CMD ["python", "-m", "lakegeneva.features.build_features", "--raw", "/app/data/raw", "--out", "/app/data/features/features.parquet"]
+CMD ["python", "-m", "lakegeneva.features.run_pipeline"]
