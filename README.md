@@ -1,6 +1,6 @@
 # Lake Geneva Temperature Forecast
 
-Predicts tomorrow's mean water temperature of Lake Geneva at Geneva (BAFU station 2606, Rhône at Genève Halle de l'Île, where the lake drains). The forecast is made every evening with the data known at 18:00 and is compared with persistence ("tomorrow = the temperature now").
+Predicts tomorrow's mean water temperature of Lake Geneva at Geneva (BAFU station 2606, Rhône at Genève Halle de l'Île, where the lake drains). The forecast is made every evening from the data measured before 18:00 and is compared with persistence ("tomorrow = the temperature now").
 
 Built as the MLOps HS26 semester project (HSLU) with the Feature / Training / Inference (FTI) pipeline architecture.
 
@@ -10,12 +10,14 @@ Built as the MLOps HS26 semester project (HSLU) with the Feature / Training / In
 
 ## Status
 - [x] MS1 – Proposal (`docs/proposal.pdf` is the repository version of 02.10.2026; the reviews used the version submitted on ILIAS)
-- [ ] MS2 – Feature pipeline (summary and response to the MS1 reviews: `docs/ms2_summary.pdf`)
+- [x] MS2 – Feature pipeline (summary and response to the MS1 reviews: `docs/ms2_summary.pdf`)
 - [ ] MS3 – Training pipeline
 - [ ] MS4 – Live system
 
 ## Goal and success criterion
-At 18:00 on day D the model predicts the mean water temperature of D+1 (6 to 30 hours ahead). The model succeeds if its MAE is **at least 20 % lower than the MAE of the stronger baseline, on the same days**:
+Every evening on day D the model predicts the mean water temperature of D+1 from the data before the 18:00 cutoff. BAFU publishes its readings about 1.5 hours late, so the forecast is ready after the evening job, not at 18:00 itself: at 20:00 Swiss time in winter and 21:00 in summer at the earliest (3 to 28 hours ahead), and later when GitHub starts the job late (around midnight in late October 2026). This changes the "18:00" of the proposal. A forecast at 18:00 sharp would only have the readings until about 16:30, and persistence would be about 4 % worse (checked on 30.10.2026).
+
+The model succeeds if its MAE is **at least 20 % lower than the MAE of the stronger baseline, on the same days**:
 - **Main target:** the test days from 21.01.2025 on. For each test day the model is trained again on all days before it (walk-forward evaluation in MS3). The first year with all features (21.01.2024–20.01.2025, 366 days) is for validation: it is used to choose the model settings and never counts for the target.
 - **Target on the big-change days:** the test days on which the temperature changes by more than 0.8 °C, where persistence fails.
 - **Reported, not a target:** October–January (only 6 big-change test days, and there plain and trend-adjusted persistence are equally good) and the live period October 2026 – January 2027 (monitoring in MS4).

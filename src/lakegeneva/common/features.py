@@ -1,8 +1,9 @@
 """One shared definition of the daily features and the label.
 
-The forecast is made every day at 18:00 Swiss time (the "issue day" D) for the mean
-water temperature of the next day (D+1). Training and the live forecast both build
-their table with this file, so a feature can never be computed in two ways.
+Every evening (the "issue day" D) the forecast for the mean water temperature of the
+next day (D+1) uses only the data from before 18:00 Swiss time. Training and the live
+forecast both build their table with this file, so a feature can never be computed
+in two ways.
 
 Water part: from the 10-minute readings of station 2606 (ingest_water.py).
 Weather part: from the 48-hour-old Open-Meteo forecast (ingest_weather_runs.py).
@@ -14,10 +15,14 @@ Weather part: from the 48-hour-old Open-Meteo forecast (ingest_weather_runs.py).
 # had their own copies, a small difference (another time zone, another cutoff)
 # would give the model data in production that does not look like its training
 # data (training-serving skew).
-# Why the 18:00 cutoff in the code: a feature may only use what was known at 18:00
-# ("point-in-time correctness", Feature Store slides, p.9-10). The cutoff is applied
-# to the time of each reading, so it does not matter when the job runs (GitHub
+# Why the 18:00 cutoff in the code: a feature may only use data from before the
+# cutoff ("point-in-time correctness", Feature Store slides, p.9-10). The cutoff is
+# applied to the time of each reading, so it does not matter when the job runs (GitHub
 # started the daily job between 19:33 and 00:36 Swiss time in October 2026).
+# 18:00 is the cutoff for the data, not the time the forecast is ready: BAFU publishes
+# its readings about 1.5 hours late, so the readings from just before 18:00 only
+# exist online after about 19:30. The forecast therefore comes after the evening job,
+# and training and the live forecast use the same readings.
 
 from pathlib import Path  # file paths that work on Windows and Linux
 
@@ -28,7 +33,7 @@ import pandas as pd  # tables: read the CSVs, group the readings by day
 # All days are Swiss calendar days. "Europe/Zurich" knows summer and winter time,
 # so 18:00 is always 18:00 on the clock in Geneva.
 TIMEZONE = "Europe/Zurich"
-# The forecast is made at 18:00: only readings before 18:00 go into the features.
+# The data cutoff: only readings measured before 18:00 go into the features.
 CUTOFF_HOUR = 18
 # Label rule from the proposal: tomorrow counts only with at least 120 of its 144
 # readings (83.3 %). Clock-change days have 138 or 150 readings and still pass.
@@ -118,7 +123,7 @@ def water_features(readings: pd.DataFrame) -> pd.DataFrame:
     # Days that pass the completeness rule; all other days get empty features.
     complete = table["n_readings_d0"] >= MIN_READINGS_D0
 
-    # --- Features: only what is known at 18:00 of day D ----------------------------
+    # --- Features: only what was measured before 18:00 of day D --------------------
     # water_mean_d0: mean water temperature today from 00:00 to 18:00.
     table["water_mean_d0"] = (early["sum_d0"] / early["n_d0"]).where(complete)
     # water_last: the last reading before 18:00.
