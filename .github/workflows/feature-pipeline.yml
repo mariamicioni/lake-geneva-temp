@@ -94,17 +94,25 @@ jobs:
 
       # 8. Rebuild the whole feature table from all raw files (about 2 seconds).
       - name: Build the feature table
+        id: build
         if: always() && steps.pull.outcome == 'success'
         run: uv run --locked --no-dev python src/lakegeneva/features/build_features.py
 
       # 9. Store the new data version: first the data into the bucket (dvc push),
       #    then the pointer files into Git. In this order a pointer in Git never
-      #    points to data that is missing in the bucket. Only if step 5 worked:
-      #    without the old data, the new version would be almost empty.
+      #    points to data that is missing in the bucket. Only if step 8 worked:
+      #    otherwise new raw files would be saved next to an old feature table, or
+      #    a broken raw file would be saved and make every later build fail too.
+      #    Step 8 only runs if step 5 worked, so this also covers a failed dvc pull
+      #    (without the old data, the new version would be almost empty). always()
+      #    keeps the step alive after a failed download: the table is still correct
+      #    then, and the next run fills in the missing days. If the job stops here,
+      #    the downloads of this run are lost, but the 7-day overlap gets them back
+      #    (only that day's audit copy of the newest forecast cannot come back).
       #    A push with GitHub's built-in token never starts another workflow, so
       #    the data commit does not trigger CI.
       - name: Store the new data version
-        if: always() && steps.pull.outcome == 'success'
+        if: always() && steps.build.outcome == 'success'
         run: |
           dvc add data/raw data/features
           dvc push

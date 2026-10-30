@@ -81,3 +81,16 @@ def test_the_daily_job_has_the_same_steps_in_the_same_order():
     in_steps = [step.__name__.split(".")[-1] for step in run_pipeline.STEPS]
 
     assert in_workflow == in_steps
+
+
+def test_the_daily_job_stores_data_only_after_a_good_build():
+    # GitHub cannot run here, so this reads the workflow file as text. read_text
+    # turns Windows line ends into \n, so the test works on every computer.
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    # The build step has the name (id) that the store step asks about.
+    assert "- name: Build the feature table\n        id: build\n" in workflow
+    # A failed build must not save new raw files next to an old feature table.
+    assert (
+        "- name: Store the new data version\n"
+        "        if: always() && steps.build.outcome == 'success'\n"
+    ) in workflow
