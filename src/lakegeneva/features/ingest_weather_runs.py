@@ -108,6 +108,11 @@ def main() -> None:
     end = args.end or now.date() + dt.timedelta(days=1)
     start = args.start or now.date() - dt.timedelta(days=7)
     hourly = fetch(start, end)
+    # An answer with no hours, or with only empty values, must not become a file: an
+    # empty file would make the feature build fail, and empty values would replace the
+    # good values of earlier files. SystemExit stops the script, so the job turns red.
+    if not any(value is not None for column in COLUMNS for value in hourly.get(column, [])):
+        raise SystemExit("The API returned no forecast values.")
 
     # One file per run, named after the range, e.g. weather_geneva_prev2_2024-01-20_to_2026-10-28.csv
     path = Path(args.out) / f"weather_geneva_prev2_{start}_to_{end}.csv"

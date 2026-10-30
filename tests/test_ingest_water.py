@@ -118,6 +118,19 @@ def test_main_falls_back_to_existenz_when_bafu_fails(monkeypatch, tmp_path):
     assert "2025-10-09T08:53:20+00:00,18.4," in path.read_text()
 
 
+def test_main_falls_back_to_existenz_when_bafu_sends_nothing(monkeypatch, tmp_path):
+    # BAFU answers without an error, but the answer holds no readings.
+    monkeypatch.setattr(ingest_water, "fetch_bafu", lambda start, end: {})
+    monkeypatch.setattr(ingest_water, "fetch", lambda start, end: {1760000000: {"temperature": 18.4}})
+    monkeypatch.setattr("sys.argv", ["ingest_water.py", "--out", str(tmp_path)])
+
+    ingest_water.main()
+
+    # The CSV was still written, with the reading from the fallback.
+    [path] = tmp_path.glob("water_2606_fetched_*.csv")
+    assert "2025-10-09T08:53:20+00:00,18.4," in path.read_text()
+
+
 def test_fetch_bafu_history_downloads_in_pieces_without_gaps(monkeypatch):
     # A stand-in for fetch_bafu(): it notes which range was asked for and returns
     # one fake reading per piece (the Unix time of the piece's first day).

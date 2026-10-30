@@ -205,8 +205,12 @@ def main() -> None:
         start, end = today - dt.timedelta(days=args.days), today + dt.timedelta(days=1)
         try:
             readings = fetch_bafu(start, end)
+            # An empty answer is not an error for the API, but it is useless for us:
+            # raising here sends it to the same fallback as a failed request.
+            if not readings:
+                raise ValueError("no readings in the answer")
         except (OSError, ValueError, KeyError, TypeError) as error:
-            # BAFU failed 3 times: take the same readings from existenz.ch instead.
+            # BAFU failed 3 times or sent nothing: take the same readings from existenz.ch.
             # The message shows up in the GitHub log, so we know which source was used.
             print(f"BAFU Data Platform failed ({error}), using existenz.ch instead")
             readings = fetch(start, end)

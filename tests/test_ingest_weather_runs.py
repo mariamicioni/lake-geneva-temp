@@ -10,6 +10,8 @@ import datetime as dt
 import io
 import json
 
+import pytest
+
 from lakegeneva.features import ingest_weather_runs
 
 
@@ -76,7 +78,8 @@ def test_main_daily_run_includes_tomorrow(monkeypatch, tmp_path):
 
     def fake_fetch(start, end):
         asked.append((start, end))
-        return {"time": []}  # no hours: this test only checks the range
+        # One hour is enough: this test only checks the range.
+        return {"time": ["2026-10-30T00:00"], **{column: [1.0] for column in ingest_weather_runs.COLUMNS}}
 
     monkeypatch.setattr(ingest_weather_runs, "fetch", fake_fetch)
     # Without --start and --end the script does the daily run.
@@ -109,3 +112,23 @@ def test_main_backfill_writes_one_file_for_the_range(monkeypatch, tmp_path):
     assert asked == [(dt.date(2024, 1, 20), dt.date(2026, 10, 28))]
     # One file named after the range.
     assert (tmp_path / "weather_geneva_prev2_2024-01-20_to_2026-10-28.csv").exists()
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        {"time": []},  # no hours at all
+        # Hours, but every value is empty.
+        {"time": ["2026-10-30T00:00"], **{column: [None] for column in ingest_weather_runs.COLUMNS}},
+    ],
+)
+def test_main_stops_and_writes_no_file_when_there_are_no_values(monkeypatch, tmp_path, answer):
+    monkeypatch.setattr(ingest_weather_runs, "fetch", lambda start, end: answer)
+    monkeypatch.setattr("sys.argv", ["ingest_weather_runs.py", "--out", str(tmp_path)])
+
+    # pytest.raises: the test passes only if the script stops with an error.
+    with pytest.raises(SystemExit):
+        ingest_weather_runs.main()
+
+    # No file: an empty file would break every later build of the feature table.
+    assert list(tmp_path.glob("*.csv")) == []
