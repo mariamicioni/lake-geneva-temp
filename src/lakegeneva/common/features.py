@@ -72,7 +72,7 @@ def load_water(raw_dir: Path | str = "data/raw") -> pd.DataFrame:
     # The backfill and every daily run wrote their own CSV with the same columns,
     # and they overlap on purpose. sorted() reads them in name order: the backfill
     # (water_2606_10min_...) first, then the daily files (water_2606_fetched_<date>)
-    # from old to new.
+    # from old to new. A second run on one day (..._run02.csv) comes after the first.
     paths = sorted(Path(raw_dir).glob("water_2606_*.csv"))
     if not paths:
         raise FileNotFoundError(f"No water files (water_2606_*.csv) in {raw_dir}")
