@@ -70,3 +70,20 @@ def test_write_csv_sorts_by_day_and_leaves_missing_values_empty(tmp_path):
         ["2026-10-09", "19.27", "184.609"],  # sorted: oldest day first
         ["2026-10-10", "19.04", ""],  # missing flow -> empty cell, not 0
     ]
+
+
+def test_a_second_run_with_the_same_range_keeps_the_first_file(monkeypatch, tmp_path):
+    # Two runs for the same day. The second answer has no flow.
+    day = dt.date(2026, 10, 10)
+    answers = iter([{day: {"water_temp_c": 19.04, "flow_m3s": 124.946}}, {day: {"water_temp_c": 19.04}}])
+    monkeypatch.setattr(ingest_bafu, "fetch", lambda start, end: next(answers))
+    monkeypatch.setattr(
+        "sys.argv", ["ingest_bafu.py", "--start", "2026-10-10", "--end", "2026-10-10", "--out", str(tmp_path)]
+    )
+
+    ingest_bafu.main()
+    ingest_bafu.main()
+
+    # The first file still has the flow; the second run has its own file.
+    assert "124.946" in (tmp_path / "bafu_2606_daily_2026-10-10_to_2026-10-10.csv").read_text()
+    assert (tmp_path / "bafu_2606_daily_2026-10-10_to_2026-10-10_run02.csv").exists()
