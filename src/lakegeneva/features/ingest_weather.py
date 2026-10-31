@@ -3,7 +3,7 @@
 Each run writes one CSV snapshot: the hourly forecast for today and the next 2 days,
 as it was published at the time of the run. This keeps a copy of exactly what the
 forecast said, next to the past forecasts that the previous-runs API can return later.
-Only uses the standard library, so it runs without installing anything.
+Uses only the standard library and one small helper of this project (no extra packages).
 """
 # Why we save forecasts and not measured weather: at 18:00 the model can only know
 # tomorrow's weather as a FORECAST. Training on measured weather would give the
@@ -11,7 +11,7 @@ Only uses the standard library, so it runs without installing anything.
 # day's forecast at the time of the run keeps exactly what was known then
 # ("point-in-time correctness", Feature Store slides, p.9-10).
 
-# All imports are from the Python standard library (nothing to install).
+# All imports except the last one are from the Python standard library.
 import argparse  # reads the command-line option --out
 import csv  # writes the result as a CSV file
 import datetime as dt  # the time of the download
@@ -19,6 +19,8 @@ import json  # reads the API answer
 import time  # time.sleep() to wait before a retry
 import urllib.request  # sends the HTTP request to the API
 from pathlib import Path  # file paths that work on Windows and Linux
+
+from lakegeneva.common import raw_files  # a second run never replaces an earlier file
 
 # --- Settings -----------------------------------------------------------------
 API_URL = "https://api.open-meteo.com/v1/forecast"
@@ -74,8 +76,10 @@ def main() -> None:
     now = dt.datetime.now(dt.timezone.utc)
     hourly = fetch()
 
-    # One file per run, e.g. weather_geneva_fetched_2026-10-20.csv
-    path = Path(args.out) / f"weather_geneva_fetched_{now.date()}.csv"
+    # One file per run, e.g. weather_geneva_fetched_2026-10-20.csv. A second run on the
+    # same day gets its own file (see common/raw_files.py): this forecast can never be
+    # downloaded again, so an overwrite would lose the first copy for good.
+    path = raw_files.new_path(Path(args.out) / f"weather_geneva_fetched_{now.date()}.csv")
     # Create the output folder if it does not exist yet (no error if it does).
     path.parent.mkdir(parents=True, exist_ok=True)
     # newline="" stops Windows from writing an empty line after every row.
