@@ -10,6 +10,7 @@ import datetime as dt
 import io
 import json
 
+from lakegeneva.common import features
 from lakegeneva.features import ingest_water
 
 
@@ -129,6 +130,23 @@ def test_main_falls_back_to_existenz_when_bafu_sends_nothing(monkeypatch, tmp_pa
     # The CSV was still written, with the reading from the fallback.
     [path] = tmp_path.glob("water_2606_fetched_*.csv")
     assert "2025-10-09T08:53:20+00:00,18.4," in path.read_text()
+
+
+def test_a_second_run_on_the_same_day_loses_no_value(monkeypatch, tmp_path):
+    # Two runs on one day. The second answer has a newer temperature but no flow.
+    answers = iter([{1760000000: {"temperature": 18.5, "flow": 250.0}}, {1760000000: {"temperature": 18.6}}])
+    monkeypatch.setattr(ingest_water, "fetch_bafu", lambda start, end: next(answers))
+    monkeypatch.setattr("sys.argv", ["ingest_water.py", "--out", str(tmp_path)])
+
+    ingest_water.main()
+    ingest_water.main()
+
+    # The second run got its own file, so the first file is still there ...
+    assert len(list(tmp_path.glob("water_2606_fetched_*.csv"))) == 2
+    # ... and the shared loader takes the newest temperature and the flow of the first run.
+    readings = features.load_water(tmp_path)
+    assert readings["water_temp_c"].iloc[0] == 18.6
+    assert readings["flow_m3s"].iloc[0] == 250.0
 
 
 def test_fetch_bafu_history_downloads_in_pieces_without_gaps(monkeypatch):
