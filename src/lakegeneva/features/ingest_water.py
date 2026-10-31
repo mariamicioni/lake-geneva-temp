@@ -9,7 +9,7 @@ BAFU Data Platform, because existenz.ch only keeps about 32 days:
     python src/lakegeneva/features/ingest_water.py                       # last 7 days
     python src/lakegeneva/features/ingest_water.py --start 2016-01-01    # backfill
 
-Only uses the standard library, so it runs without installing anything.
+Uses only the standard library and one small helper of this project (no extra packages).
 """
 # What this file is for: the 10-minute readings (144 per day). The proposal's
 # features need them: "mean water temperature today until 18:00" and "last reading
@@ -29,7 +29,7 @@ Only uses the standard library, so it runs without installing anything.
 # the daily files - the course calls this "backfilling" (Feature Store slides,
 # p.7-8): one pipeline, run with a start and end date over old data.
 
-# All imports are from the Python standard library (nothing to install).
+# All imports except the last one are from the Python standard library.
 import argparse  # reads the command-line options --days, --start, --end and --out
 import csv  # writes the result as a CSV file
 import datetime as dt  # dates, times and time zones
@@ -37,6 +37,8 @@ import json  # reads the API answer
 import time  # time.sleep() to wait before a retry
 import urllib.request  # sends the HTTP request to the API
 from pathlib import Path  # file paths that work on Windows and Linux
+
+from lakegeneva.common import raw_files  # a second run never replaces an earlier file
 
 # --- Settings -----------------------------------------------------------------
 # Fallback source, existenz.ch: the "daterange" endpoint gives all readings
@@ -220,6 +222,8 @@ def main() -> None:
         # SystemExit stops the script with an error, so the GitHub job turns red.
         raise SystemExit("The API returned no readings.")
 
+    # A second run with the same file name gets its own file (see common/raw_files.py).
+    path = raw_files.new_path(path)
     write_csv(readings, path)
     print(f"Saved {len(readings)} readings to {path}")
 
