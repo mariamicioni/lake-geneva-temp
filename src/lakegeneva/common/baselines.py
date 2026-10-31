@@ -64,6 +64,10 @@ def bootstrap_mae_difference(errors_a, errors_b, block: int = BLOCK_DAYS, seed: 
     # how much the difference moves between them. Days are drawn in blocks of 7
     # days in a row, because one windy week affects several days, so single days
     # are not independent (moving-block bootstrap, Künsch 1989, [8] in README.md).
+    # Careful: "in a row" means 7 rows of the table it gets. For a part of the days
+    # (e.g. only the big-change days) 7 rows can be far apart: up to 228 calendar days
+    # on 30.10.2026. Blocks of real calendar days moved the intervals by at most
+    # 0.016 °C and changed no conclusion, so this stays for MS2 and is fixed in MS3.
     # Per day: how much larger the error of a was than the error of b.
     diff = np.asarray(errors_a, dtype=float) - np.asarray(errors_b, dtype=float)
     n = len(diff)
