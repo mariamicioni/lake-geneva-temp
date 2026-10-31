@@ -10,7 +10,7 @@ run and for the backfill:
     python src/lakegeneva/features/ingest_weather_single.py                       # last 7 days
     python src/lakegeneva/features/ingest_weather_single.py --start 2024-08-10    # backfill
 
-Only uses the standard library, so it runs without installing anything.
+Uses only the standard library and one small helper of this project (no extra packages).
 """
 # Why a second weather source: the features use the 48-hour-old forecast
 # (ingest_weather_runs.py), which is always safe but old. This run is about one day
@@ -23,7 +23,7 @@ Only uses the standard library, so it runs without installing anything.
 # 12:00 UTC runs from 14.03.2024). Single days are missing (e.g. 05.08.2025); they
 # are skipped, not treated as an error.
 
-# All imports are from the Python standard library (nothing to install).
+# All imports except the last one are from the Python standard library.
 import argparse  # reads the command-line options --start, --end and --out
 import csv  # writes the result as a CSV file
 import datetime as dt  # dates and the time of the download
@@ -32,6 +32,8 @@ import time  # time.sleep() between requests and before a retry
 import urllib.error  # HTTPError: the API answered with an error code
 import urllib.request  # sends the HTTP request to the API
 from pathlib import Path  # file paths that work on Windows and Linux
+
+from lakegeneva.common import raw_files  # a second run never replaces an earlier file
 
 # --- Settings -----------------------------------------------------------------
 API_URL = "https://single-runs-api.open-meteo.com/v1/forecast"
@@ -139,7 +141,8 @@ def main() -> None:
         raise SystemExit("The API returned no run at all.")
 
     # One file per run of the script, e.g. weather_geneva_single06_2024-08-10_to_2026-10-27.csv
-    path = Path(args.out) / f"weather_geneva_single06_{start}_to_{end}.csv"
+    # A second run with the same range gets its own file (see common/raw_files.py).
+    path = raw_files.new_path(Path(args.out) / f"weather_geneva_single06_{start}_to_{end}.csv")
     write_csv(runs, now, path)
     print(f"Saved {len(runs)} runs ({min(runs)} to {max(runs)}) to {path}")
 
