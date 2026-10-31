@@ -93,6 +93,25 @@ def test_main_writes_one_file_and_skips_missing_days(monkeypatch, tmp_path, caps
     assert "2025-08-05" in capsys.readouterr().out
 
 
+def test_a_second_run_with_the_same_range_keeps_the_first_file(monkeypatch, tmp_path):
+    answer = {"time": ["2025-08-05T00:00"], **{v: [1.0] for v in ingest_weather_single.VARIABLES}}
+    monkeypatch.setattr(ingest_weather_single.time, "sleep", lambda seconds: None)
+    monkeypatch.setattr(
+        "sys.argv", ["ingest_weather_single.py", "--start", "2025-08-04", "--end", "2025-08-05", "--out", str(tmp_path)]
+    )
+
+    # The first run gets both days, the second run only gets 05.08.
+    monkeypatch.setattr(ingest_weather_single, "fetch_run", lambda day: answer)
+    ingest_weather_single.main()
+    monkeypatch.setattr(ingest_weather_single, "fetch_run", lambda day: answer if day == dt.date(2025, 8, 5) else None)
+    ingest_weather_single.main()
+
+    # The first file still holds the run of 04.08; the second run has its own file.
+    first = tmp_path / "weather_geneva_single06_2025-08-04_to_2025-08-05.csv"
+    assert "2025-08-04T06:00Z" in first.read_text()
+    assert (tmp_path / "weather_geneva_single06_2025-08-04_to_2025-08-05_run02.csv").exists()
+
+
 def test_main_daily_run_asks_for_today_and_the_6_days_before(monkeypatch, tmp_path):
     # A stand-in for fetch_run() that notes which days were asked for.
     asked = []
