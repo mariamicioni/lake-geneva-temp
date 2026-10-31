@@ -291,6 +291,44 @@ def test_load_weather_keeps_the_newest_download_and_ignores_the_snapshots(tmp_pa
     assert hours["time_local"].iloc[0] == pd.Timestamp("2026-10-02 12:00", tz="Europe/Zurich")
 
 
+def test_load_weather_does_not_lose_a_value_when_the_newer_download_has_a_gap(tmp_path):
+    header = (
+        "fetched_at_utc,time_utc,temperature_2m_previous_day2,sunshine_duration_previous_day2,"
+        "wind_speed_10m_previous_day2,wind_direction_10m_previous_day2\n"
+    )
+    # The same hour in two downloads. The newer one has the temperature but no sunshine.
+    (tmp_path / "weather_geneva_prev2_2026-10-01_to_2026-10-02.csv").write_text(
+        header + "2026-10-01T19:00:00+00:00,2026-10-02T10:00,15.0,3600,10,225\n"
+    )
+    (tmp_path / "weather_geneva_prev2_2026-10-02_to_2026-10-03.csv").write_text(
+        header + "2026-10-02T19:00:00+00:00,2026-10-02T10:00,15.5,,10,225\n"
+    )
+
+    hours = features.load_weather(tmp_path)
+
+    # One row: the newest temperature, and the sunshine from the older download.
+    assert len(hours) == 1
+    assert hours[features.TEMPERATURE].iloc[0] == 15.5
+    assert hours[features.SUNSHINE].iloc[0] == 3600
+
+
+def test_newer_download_with_gaps_keeps_a_forecast_day_usable(tmp_path):
+    # An older, complete download of today and tomorrow ...
+    older = pd.concat([forecast_hours("2026-10-10"), forecast_hours("2026-10-11")], ignore_index=True)
+    older.drop(columns="time_local").to_csv(tmp_path / "weather_geneva_prev2_2026-10-10_to_2026-10-11.csv", index=False)
+    # ... and a newer download of the same hours in which all sunshine values are empty.
+    newer = older.copy()
+    newer["fetched_at_utc"] = pd.Timestamp("2026-10-28 19:00", tz="UTC")
+    newer[features.SUNSHINE] = float("nan")
+    newer.drop(columns="time_local").to_csv(tmp_path / "weather_geneva_prev2_2026-10-10_to_2026-10-12.csv", index=False)
+
+    table = features.weather_features(features.load_weather(tmp_path))
+
+    # All 24 hours stay complete, so tomorrow's forecast still exists: 24 x 1800 s = 12
+    # hours of sun. If the newer rows replaced the older ones, this day would be empty.
+    assert table.loc[pd.Timestamp("2026-10-10"), "sunshine_fc_d1"] == 12.0
+
+
 def test_load_weather_undoes_the_open_meteo_shift_of_old_files(tmp_path):
     # An OLD file (time_local), downloaded on 27.10.2026 in winter time: Open-Meteo
     # shifted every hour by +1 h, also this summer hour, so "12:00" means 11:00 UTC.
