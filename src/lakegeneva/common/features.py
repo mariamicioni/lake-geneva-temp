@@ -187,12 +187,17 @@ def load_weather(raw_dir: Path | str = "data/raw") -> pd.DataFrame:
         shifted_back = (pd.to_datetime(hours["time_local"]) - offset).dt.tz_localize("UTC")
         time_utc = time_utc.where(~old, shifted_back)
     hours["time_utc"] = time_utc
+    # The same hour can be in several files (the daily runs overlap). Sort by download
+    # time, so that for each hour and each column last() takes the value of the newest
+    # download. last() skips empty cells, so a newer download with a gap cannot delete
+    # a good value of an older one (the same rule as in load_water). A 48-hour-old
+    # forecast does not change, so the copies should be equal anyway. Checked on
+    # 31.10.2026: 264 hours are in several files, no value differs and none was lost,
+    # so this rule protects against a future partial answer and changes no table today.
+    hours = hours.sort_values("fetched_at_utc")
+    hours = hours.groupby("time_utc", as_index=False)[[TEMPERATURE, SUNSHINE, WIND_SPEED, WIND_DIRECTION]].last()
     # Swiss local time WITH summer time: this decides to which Swiss day an hour belongs.
-    hours["time_local"] = time_utc.dt.tz_convert(TIMEZONE)
-    # The same hour can be in several files (the daily runs overlap). Keep the
-    # newest download: sort by download time, then keep the last copy of each hour.
-    # A 48-hour-old forecast does not change, so this only makes the choice clear.
-    hours = hours.sort_values("fetched_at_utc").drop_duplicates(subset="time_utc", keep="last")
+    hours["time_local"] = hours["time_utc"].dt.tz_convert(TIMEZONE)
     return hours.sort_values("time_utc").reset_index(drop=True)
 
 
