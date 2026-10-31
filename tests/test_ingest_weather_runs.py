@@ -130,5 +130,6 @@ def test_main_stops_and_writes_no_file_when_there_are_no_values(monkeypatch, tmp
     with pytest.raises(SystemExit):
         ingest_weather_runs.main()
 
-    # No file: an empty file would break every later build of the feature table.
+    # No file: an empty file would hide the problem, and it would break a build that
+    # has no older files (the Docker image).
     assert list(tmp_path.glob("*.csv")) == []
