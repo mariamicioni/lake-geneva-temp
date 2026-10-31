@@ -108,9 +108,10 @@ def main() -> None:
     end = args.end or now.date() + dt.timedelta(days=1)
     start = args.start or now.date() - dt.timedelta(days=7)
     hourly = fetch(start, end)
-    # An answer with no hours, or with only empty values, must not become a file: an
-    # empty file would make the feature build fail, and empty values would replace the
-    # good values of earlier files. SystemExit stops the script, so the job turns red.
+    # An answer with no hours, or with only empty values, must not become a file: the
+    # job would stay green although the API gave no data, and in a run without older
+    # files (the Docker image) an empty file makes the feature build fail with a
+    # confusing error. SystemExit stops the script, so the job turns red.
     if not any(value is not None for column in COLUMNS for value in hourly.get(column, [])):
         raise SystemExit("The API returned no forecast values.")
 
