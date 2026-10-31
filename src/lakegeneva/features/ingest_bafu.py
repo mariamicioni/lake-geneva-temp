@@ -7,7 +7,7 @@ same source and the same definition of a daily mean:
     python src/lakegeneva/features/ingest_bafu.py                       # last 7 days
     python src/lakegeneva/features/ingest_bafu.py --start 2016-01-01    # backfill
 
-Only uses the standard library, so it runs without installing anything.
+Uses only the standard library and one small helper of this project (no extra packages).
 """
 # Why one script for both jobs: the course calls this "backfilling" (Feature Store
 # slides, p.7-8): run the same feature pipeline with a start and end date over old
@@ -15,8 +15,7 @@ Only uses the standard library, so it runs without installing anything.
 # compute the daily mean differently and the model would learn from data that
 # does not look like what it gets in production (training-serving skew).
 
-# All imports are from the Python standard library: nothing to install, so the
-# GitHub Actions job can run this file with a plain Python.
+# All imports except the last one are from the Python standard library.
 import argparse  # reads the command-line options --start, --end, --out
 import csv  # writes the result as a CSV file
 import datetime as dt  # dates, times and time zones
@@ -24,6 +23,8 @@ import json  # builds the request body and reads the API answer
 import time  # time.sleep() to wait before a retry
 import urllib.request  # sends the HTTP request to the API
 from pathlib import Path  # file paths that work on Windows and Linux
+
+from lakegeneva.common import raw_files  # a second run never replaces an earlier file
 
 # --- Settings -----------------------------------------------------------------
 # GraphQL APIs have one single URL; what we want is described in the query text.
@@ -144,7 +145,8 @@ def main() -> None:
 
     # The file name records the requested range, e.g.
     # bafu_2606_daily_2016-01-01_to_2026-10-11.csv
-    path = Path(args.out) / f"bafu_{STATION}_daily_{start}_to_{end}.csv"
+    # A second run with the same range gets its own file (see common/raw_files.py).
+    path = raw_files.new_path(Path(args.out) / f"bafu_{STATION}_daily_{start}_to_{end}.csv")
     write_csv(days, path)
     print(f"Saved {len(days)} days ({min(days)} to {max(days)}) to {path}")
 
