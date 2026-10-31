@@ -45,7 +45,8 @@ Units in the raw files: `water_temp_c` °C, `flow_m3s` m³/s, `temperature_2m` �
 ## Gaps and rules
 - **Water history (BAFU, 2016-2026):** no day below 120 readings (checked on 27.10.2026); BAFU's history is checked and complete.
 - **Live data:** existenz.ch had days with only 10-12 readings (five Sundays in August/September 2026). Hence the rules: the label needs at least 120 of 144 readings, the features at least 90 of the 108 readings before 18:00, a forecast day at least 20 of its 24 hours (all 83 %).
-- **The same reading in several files:** water: for each column, the file later in name order wins (the newest daily download), but an empty cell never replaces a value; weather: the newest download wins. BAFU and existenz.ch differ by less than 0.01 °C on average.
+- **The same reading in several files:** for each column the newest copy wins (water: the file later in name order, which is the newest daily download; weather: the newest download time), but an empty cell never replaces a value. BAFU and existenz.ch differ by less than 0.01 °C on average.
+- **Extra flow readings from existenz.ch:** its files hold one extra reading per day at 22:55 UTC, with a flow but no temperature (28.08.-25.10.2026). They stay in the data: they move `flow_mean_d0` by at most 1.6 m³/s on 53 days and change no temperature feature and no label (checked on 31.10.2026).
 - **BAFU's newest 10-minute values are about 1.5 hours old** (measured on 27.10 and 30.10.2026), so the daily job runs at 19:00 UTC, well after the cutoff.
 - **Weather history:** the 48-hour-old sunshine and wind exist from 20.01.2024 13:00 (air temperature from 2022). The 06:00 UTC single runs exist from 10.08.2024; one run is missing in the archive (05.08.2025); the first hour of every run has no sunshine value.
 - **Clock-change days** have 23 or 25 hours (138 or 150 readings) and count as complete.
