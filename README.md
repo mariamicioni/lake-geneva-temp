@@ -1,6 +1,6 @@
 # Lake Geneva Temperature Forecast
 
-Predicts tomorrow's mean water temperature of Lake Geneva at Geneva (BAFU station 2606, Rhône at Genève Halle de l'Île, where the lake drains). The forecast is made every evening from the data measured before 18:00 and is compared with persistence ("tomorrow = the temperature now").
+The goal: predict tomorrow's mean water temperature of Lake Geneva at Geneva (BAFU station 2606, Rhône at Genève Halle de l'Île, where the lake drains). The forecast will be made every evening from the data measured before 18:00 and compared with persistence ("tomorrow = the temperature now"). What runs today is the feature pipeline, every evening. The model comes in MS3 and the live forecast in MS4.
 
 Built as the MLOps HS26 semester project (HSLU) with the Feature / Training / Inference (FTI) pipeline architecture.
 
@@ -54,18 +54,18 @@ The rules that prevent leakage: every day is a Swiss calendar day (with summer t
 
 ## Where the data lives
 Data and models are never stored in Git; Git only holds code, configuration and small DVC pointer files. The only exception is a 4-day test sample of real BAFU readings in `tests/fixtures/` (22 KB), so that CI can test the feature code without the data.
-- **Raw data and features (MS2):** versioned with DVC [5]. The files are in the private Google Cloud Storage bucket `gs://lake-geneva-temp-data` (folder `dvc/`); Git holds only the pointer files `data/raw.dvc` (all raw downloads) and `data/features.dvc` (the feature table `features.parquet`, built by `src/lakegeneva/features/build_features.py`). Data versions are Git tags: `data-v1` = the raw data until 27.10.2026 and the first feature table.
-- **Get the data** (needs a key of the bucket's service account): see "How to run" below. Without a key, the tests still run on the sample in `tests/fixtures/`, and the Docker image still runs the whole pipeline on the last 7 days (see "How to run").
-- **Daily update:** the feature pipeline commits the two pointer files as `github-actions[bot]` ("chore(data): daily update ..."). So every day is one data version in Git, and every model can name the data it was trained on.
-- **Models:** MLflow tracking and model registry hosted on DagsHub (alias `champion` = model in production).
+- **Raw data and features (MS2):** versioned with DVC [5]. The files are in the private Google Cloud Storage bucket `gs://lake-geneva-temp-data` (folder `dvc/`); Git holds only the pointer files `data/raw.dvc` (all raw downloads) and `data/features.dvc` (the feature table `features.parquet`, built by `src/lakegeneva/features/build_features.py`). Every commit of the pointer files is one data version. The tag `data-v1` marks the first one: the raw data until 27.10.2026 and the first feature table.
+- **Get the data** (needs a key of the bucket's service account): see "How to run" below. Without a key, the tests still run on the sample in `tests/fixtures/`, the Docker image still runs the whole pipeline on the last 7 days, and the backfill commands rebuild the whole feature table from the public APIs (see "How to run").
+- **Daily update:** the feature pipeline commits the two pointer files as `github-actions[bot]` ("chore(data): daily update ..."). So every day is one data version in Git, and from MS3 on every model can name the data it was trained on.
+- **Models (planned for MS3):** MLflow tracking and model registry hosted on DagsHub (alias `champion` = model in production). There is no MLflow code and no model yet.
 
 ## How to run
 Set up and test (Python 3.12 and the exact package versions from `uv.lock`; the tests need no data and no internet):
 ```bash
 git clone https://github.com/mariamicioni/lake-geneva-temp.git
 cd lake-geneva-temp
-uv sync
-uv run pytest
+uv sync --locked          # --locked: stop if uv.lock does not fit pyproject.toml
+uv run --locked pytest
 ```
 Get the data (needs a key of the bucket's service account; the key path stays in `.dvc/config.local`, which is not in Git):
 ```bash
@@ -91,6 +91,8 @@ uv run python src/lakegeneva/features/ingest_weather_runs.py --start 2022-01-01
 uv run python src/lakegeneva/features/ingest_weather_single.py --start 2024-08-10
 uv run python src/lakegeneva/features/ingest_bafu.py --start 2016-01-01   # BAFU daily means (for context)
 ```
+The backfill needs no key, because all these sources are public. The water and the 48-hour-old forecast lines, followed by `build_features.py`, rebuild the whole feature table in about 11 minutes. I checked this on 31.10.2026 against the stored table: the same days and the same weather features. The water values differ only between 27.08. and 25.10.2026, because the stored data keeps the existenz.ch copies of those readings, and on the newest two days, because the rebuild ran later. The label differs by at most 0.02 °C, and persistence on the test days is 0.532 °C stored and 0.531 °C rebuilt. Only the daily audit copies of the newest forecast cannot be downloaded again; they stay in the bucket.
+
 With Docker, no key and no data needed: the image runs the whole pipeline with the public APIs. It downloads the last 7 days and builds the table from them (about 10 seconds). The files stay in the container and are deleted with it, so this is a check that the pipeline works:
 ```bash
 docker build -t lake-geneva-features .
@@ -106,8 +108,8 @@ On Linux the user in the container must be allowed to write to `out/`: run `mkdi
 ```
 src/lakegeneva/
   features/    feature pipeline (ingest, backfill, build the table)
-  training/    training pipeline (read features, train, evaluate, register)
-  inference/   inference pipeline (load model, predict, serve)
+  training/    training pipeline, empty until MS3 (read features, train, evaluate, register)
+  inference/   inference pipeline, empty until MS4 (load model, predict, serve)
   common/      shared code: feature definition, baselines
 tests/         unit tests (run in CI); fixtures/ holds the small test sample
 data/          raw/ and features/ (not in Git: DVC pointer files raw.dvc, features.dvc)
