@@ -12,6 +12,7 @@ import json
 
 import pytest
 
+from lakegeneva.common import features
 from lakegeneva.features import ingest_weather_runs
 
 
@@ -112,6 +113,28 @@ def test_main_backfill_writes_one_file_for_the_range(monkeypatch, tmp_path):
     assert asked == [(dt.date(2024, 1, 20), dt.date(2026, 10, 28))]
     # One file named after the range.
     assert (tmp_path / "weather_geneva_prev2_2024-01-20_to_2026-10-28.csv").exists()
+
+
+def test_a_second_download_of_the_same_range_loses_no_value(monkeypatch, tmp_path):
+    # Two downloads of the same range on one day. The first answer is complete, the
+    # second one has no sunshine (not all empty, so the script accepts it).
+    hours = ["2026-11-01T10:00", "2026-11-01T11:00"]
+    complete = {"time": hours, **{column: [10.0, 10.0] for column in ingest_weather_runs.COLUMNS}}
+    gaps = {**complete, features.SUNSHINE: [None, None]}
+    answers = iter([complete, gaps])
+    monkeypatch.setattr(ingest_weather_runs, "fetch", lambda start, end: next(answers))
+    monkeypatch.setattr(
+        "sys.argv", ["ingest_weather_runs.py", "--start", "2026-10-25", "--end", "2026-11-01", "--out", str(tmp_path)]
+    )
+
+    ingest_weather_runs.main()
+    ingest_weather_runs.main()
+
+    # The second download got its own file, so the first file is still complete ...
+    assert (tmp_path / "weather_geneva_prev2_2026-10-25_to_2026-11-01.csv").exists()
+    assert (tmp_path / "weather_geneva_prev2_2026-10-25_to_2026-11-01_run02.csv").exists()
+    # ... and the shared loader still finds every sunshine value.
+    assert list(features.load_weather(tmp_path)[features.SUNSHINE]) == [10.0, 10.0]
 
 
 @pytest.mark.parametrize(
