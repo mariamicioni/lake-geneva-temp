@@ -46,7 +46,7 @@ What is specific here: the outflow of a large lake. Its huge heat store makes pe
 ## The feature pipeline
 Every evening (`.github/workflows/feature-pipeline.yml`, 19:00 UTC):
 1. `dvc pull` gets the current data version from the bucket.
-2. The download scripts add the newest water readings and forecasts to `data/raw/` (each one overlaps the last 7 days, so a missed day is filled in).
+2. The download scripts add the newest water readings and forecasts to `data/raw/` (each one overlaps the last 7 days, so a missed day is filled in). They never overwrite a file: a second run on the same day writes its own file.
 3. `build_features.py` rebuilds the whole daily feature table with the one shared feature definition in `src/lakegeneva/common/features.py` and saves it as `data/features/features.parquet`.
 4. `dvc push` stores the data in the bucket, and the job commits the two pointer files: one data version per day.
 
@@ -110,7 +110,7 @@ src/lakegeneva/
   features/    feature pipeline (ingest, backfill, build the table)
   training/    training pipeline, empty until MS3 (read features, train, evaluate, register)
   inference/   inference pipeline, empty until MS4 (load model, predict, serve)
-  common/      shared code: feature definition, baselines
+  common/      shared code: feature definition, baselines, names of the raw files
 tests/         unit tests (run in CI); fixtures/ holds the small test sample
 data/          raw/ and features/ (not in Git: DVC pointer files raw.dvc, features.dvc)
 .github/workflows/  ci.yml (tests + image), feature-pipeline.yml (daily)
@@ -136,6 +136,7 @@ I build this project on what the MLOps HS26 course teaches. When a file follows 
 | `src/lakegeneva/features/ingest_weather_runs.py` | Open-Meteo Previous Runs API documentation [6] | Written for this project |
 | `src/lakegeneva/features/ingest_weather_single.py` | Open-Meteo Single Runs API documentation [9] | Written for this project |
 | `src/lakegeneva/common/features.py` | The features of my proposal (`docs/proposal.pdf`), pandas documentation [7] | Written for this project |
+| `src/lakegeneva/common/raw_files.py` | A review of this repository found that a second download on the same day replaced the first file | Written for this project |
 | `src/lakegeneva/features/build_features.py` | pandas documentation [7] (Parquet) | Written for this project |
 | `src/lakegeneva/features/run_pipeline.py` | The steps of the daily job (`feature-pipeline.yml`); "no shell tricks" from the Block 3 exercise [12] | Written for this project |
 | `.dvc/config`, `data/raw.dvc`, `data/features.dvc` | Block 1 exercise, Part A (version the data with DVC) [5] | Google Cloud Storage instead of the local S3 bucket; the key path only in `.dvc/config.local` (not in Git) |
