@@ -8,7 +8,7 @@ forecast get exactly the same kind of weather data:
     python src/lakegeneva/features/ingest_weather_runs.py                       # last 7 days + tomorrow
     python src/lakegeneva/features/ingest_weather_runs.py --start 2024-01-20    # backfill
 
-Only uses the standard library, so it runs without installing anything.
+Uses only the standard library and one small helper of this project (no extra packages).
 """
 # Why a 48-hour-old forecast: at 18:00 the model may only use what was known
 # before 18:00 ("point-in-time correctness", Feature Store slides, p.9-10). The
@@ -21,7 +21,7 @@ Only uses the standard library, so it runs without installing anything.
 # (about 17 seconds). ingest_weather.py keeps saving the newest forecast as an
 # audit copy.
 
-# All imports are from the Python standard library (nothing to install).
+# All imports except the last one are from the Python standard library.
 import argparse  # reads the command-line options --start, --end and --out
 import csv  # writes the result as a CSV file
 import datetime as dt  # dates and the time of the download
@@ -29,6 +29,8 @@ import json  # reads the API answer
 import time  # time.sleep() to wait before a retry
 import urllib.request  # sends the HTTP request to the API
 from pathlib import Path  # file paths that work on Windows and Linux
+
+from lakegeneva.common import raw_files  # a second run never replaces an earlier file
 
 # --- Settings -----------------------------------------------------------------
 API_URL = "https://previous-runs-api.open-meteo.com/v1/forecast"
@@ -116,7 +118,8 @@ def main() -> None:
         raise SystemExit("The API returned no forecast values.")
 
     # One file per run, named after the range, e.g. weather_geneva_prev2_2024-01-20_to_2026-10-28.csv
-    path = Path(args.out) / f"weather_geneva_prev2_{start}_to_{end}.csv"
+    # A second run with the same range gets its own file (see common/raw_files.py).
+    path = raw_files.new_path(Path(args.out) / f"weather_geneva_prev2_{start}_to_{end}.csv")
     write_csv(hourly, now, path)
     print(f"Saved {len(hourly['time'])} forecast hours ({start} to {end}) to {path}")
 
