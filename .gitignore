@@ -28,5 +28,7 @@ models/
 # os / editor
 .DS_Store
 Thumbs.db
+# Word lock files, created while a .docx is open
+~$*
 .vscode/
 .idea/
