@@ -22,10 +22,14 @@
 
 # ---- builder: install the exact package versions ---------------------------
 # Python 3.12, the same version as .python-version (local, CI and the daily job).
-FROM python:3.12-slim AS builder
+# The @sha256 part fixes the exact image: the name "3.12-slim" alone moves to a newer
+# image from time to time (it did between 27.10 and 01.11.2026). This digest covers
+# all processor types, so the image still builds on Intel PCs and on Macs with an
+# Apple chip.
+FROM python:3.12-slim@sha256:aa943ce411423c7582288f18707ff66eddcbaeb510502d747a72aeb34f30d159 AS builder
 
 # uv from its official image, with a fixed version (not "latest"), like my laptop.
-COPY --from=ghcr.io/astral-sh/uv:0.13.0 /uv /bin/
+COPY --from=ghcr.io/astral-sh/uv:0.13.0@sha256:cdc6093146eb3ff6a40107b38f008b789e050e77ad87865e381d9917da55a168 /uv /bin/
 
 WORKDIR /app
 # Copy only the two dependency files first: as long as they do not change, Docker
@@ -39,7 +43,7 @@ RUN uv export --locked --no-dev --no-emit-project -o /tmp/requirements.txt && \
     uv pip install --system --target /app/deps -r /tmp/requirements.txt
 
 # ---- final: small runtime image, non-root -----------------------------------
-FROM python:3.12-slim
+FROM python:3.12-slim@sha256:aa943ce411423c7582288f18707ff66eddcbaeb510502d747a72aeb34f30d159
 
 # Which version of the code is inside: CI passes the Git commit (see ci.yml).
 ARG APP_VERSION=dev
