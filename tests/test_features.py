@@ -162,6 +162,45 @@ def test_load_water_does_not_lose_a_value_when_the_newer_file_has_a_gap(tmp_path
     assert readings["flow_m3s"].iloc[0] == 200.0
 
 
+def test_load_water_ignores_impossible_values(tmp_path, capsys):
+    # Three times: a broken temperature, a broken flow, and a real negative flow.
+    (tmp_path / "water_2606_fetched_2026-10-02.csv").write_text(
+        "time_utc,water_temp_c,flow_m3s\n"
+        "2026-10-01T10:00:00+00:00,99.0,200.0\n"
+        "2026-10-01T10:10:00+00:00,18.4,9999.0\n"
+        "2026-10-01T10:20:00+00:00,18.3,-14.9\n"
+    )
+
+    readings = features.load_water(tmp_path)
+
+    # The impossible values are empty; the other column of the same row stays.
+    assert pd.isna(readings["water_temp_c"].iloc[0])
+    assert readings["flow_m3s"].iloc[0] == 200.0
+    assert pd.isna(readings["flow_m3s"].iloc[1])
+    # A slightly negative flow exists in the real BAFU data, so it must stay.
+    assert readings["flow_m3s"].iloc[2] == -14.9
+    # The log says what happened.
+    output = capsys.readouterr().out
+    assert "1 values of water_temp_c" in output
+    assert "1 values of flow_m3s" in output
+
+
+def test_a_wrong_value_in_a_newer_file_does_not_replace_a_good_value(tmp_path):
+    # The same time in two files. The newer file has a wrong temperature.
+    (tmp_path / "water_2606_10min_2026-10-01_to_2026-10-01.csv").write_text(
+        "time_utc,water_temp_c,flow_m3s\n2026-10-01T10:00:00+00:00,18.50,200.0\n"
+    )
+    (tmp_path / "water_2606_fetched_2026-10-02.csv").write_text(
+        "time_utc,water_temp_c,flow_m3s\n2026-10-01T10:00:00+00:00,99.0,201.0\n"
+    )
+
+    readings = features.load_water(tmp_path)
+
+    # The good temperature of the older file stays, the newest flow is used.
+    assert readings["water_temp_c"].iloc[0] == 18.50
+    assert readings["flow_m3s"].iloc[0] == 201.0
+
+
 def test_real_sample_around_the_clock_change():
     # Real BAFU readings of 27.-30.03.2026, read the same way as the full data.
     table = features.water_features(features.load_water(FIXTURES))

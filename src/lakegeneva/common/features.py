@@ -41,6 +41,12 @@ MIN_READINGS_LABEL = 120
 # The same 83.3 % for today before 18:00: at least 90 of the 108 readings
 # (00:00 to 17:50). Otherwise no forecast is made from a half-empty day.
 MIN_READINGS_D0 = 90
+# Values outside these limits cannot be real, so they count as missing (a broken
+# sensor or a wrong answer from the API). The limits are wide on purpose. Checked on
+# 01.11.2026 on all raw files: the temperature goes from 4.6 to 27.7 °C and the flow
+# from -14.9 to 642.9 m³/s. So no real reading is touched. The flow can be slightly
+# negative in the BAFU data, so its limit is not 0.
+PLAUSIBLE_WATER = {"water_temp_c": (0, 35), "flow_m3s": (-50, 1500)}
 # The water features of the proposal, in the order of the table.
 WATER_FEATURES = ["water_mean_d0", "water_last", "water_mean_3d", "water_trend_3d", "flow_mean_d0"]
 # The column with the value we want to predict.
@@ -80,6 +86,15 @@ def load_water(raw_dir: Path | str = "data/raw") -> pd.DataFrame:
     readings = pd.concat([pd.read_csv(path) for path in paths], ignore_index=True)
     # Text -> real time stamps. utc=True: the times in the raw files are UTC.
     readings["time_utc"] = pd.to_datetime(readings["time_utc"], utc=True, format="ISO8601")
+    # Impossible values become empty cells, before the files are merged: last() below
+    # skips empty cells, so a wrong value in a newer file cannot replace a good value
+    # of an older file. A day with too many empty cells fails the completeness rules.
+    for column, (low, high) in PLAUSIBLE_WATER.items():
+        impossible = readings[column].notna() & ~readings[column].between(low, high)
+        if impossible.any():
+            # Printed, so that it shows up in the log of the daily job.
+            print(f"Warning: {int(impossible.sum())} values of {column} outside {low} to {high} are ignored")
+            readings[column] = readings[column].where(~impossible)
     # The same reading can be in several files. For each time and each column, last()
     # takes the value from the file that comes last in name order, i.e. the newest
     # daily download, and it skips empty cells. So a newer file with a gap cannot delete
