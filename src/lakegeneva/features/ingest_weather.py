@@ -21,12 +21,10 @@ import urllib.request  # sends the HTTP request to the API
 from pathlib import Path  # file paths that work on Windows and Linux
 
 from lakegeneva.common import raw_files  # a second run never replaces an earlier file
+from lakegeneva.common.location import LATITUDE, LONGITUDE  # the point in Geneva
 
 # --- Settings -----------------------------------------------------------------
 API_URL = "https://api.open-meteo.com/v1/forecast"
-# Geneva, close to the station and the Bains des Pâquis (see config/settings.yaml).
-LATITUDE = 46.20
-LONGITUDE = 6.14
 # Hourly weather variables, with Open-Meteo's names:
 # - temperature_2m: air temperature 2 m above ground (°C)
 # - sunshine_duration: seconds of sunshine in each hour (0-3600)

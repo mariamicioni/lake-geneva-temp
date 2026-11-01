@@ -31,12 +31,10 @@ import urllib.request  # sends the HTTP request to the API
 from pathlib import Path  # file paths that work on Windows and Linux
 
 from lakegeneva.common import raw_files  # a second run never replaces an earlier file
+from lakegeneva.common.location import LATITUDE, LONGITUDE  # the point in Geneva
 
 # --- Settings -----------------------------------------------------------------
 API_URL = "https://previous-runs-api.open-meteo.com/v1/forecast"
-# Geneva, the same point as in ingest_weather.py (see config/settings.yaml).
-LATITUDE = 46.20
-LONGITUDE = 6.14
 # The same four hourly variables as in ingest_weather.py (explained there).
 VARIABLES = ["temperature_2m", "sunshine_duration", "wind_speed_10m", "wind_direction_10m"]
 # The API names the 48-hour-old values with this ending, e.g.
