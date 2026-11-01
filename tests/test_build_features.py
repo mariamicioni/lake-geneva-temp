@@ -1,5 +1,6 @@
 """Tests for the last step of the feature pipeline (raw files -> Parquet)."""
 # How to run: `uv run pytest` (locally) - CI runs the same on every push.
+import sys
 from pathlib import Path
 
 import pandas as pd
@@ -10,8 +11,8 @@ from lakegeneva.features import build_features
 FIXTURES = Path(__file__).parent / "fixtures"
 
 
-def test_parquet_file_gives_back_exactly_the_same_table(tmp_path):
-    # One raw folder: the real water sample and a fake 48-hour-old forecast.
+def make_raw_folder(tmp_path: Path) -> Path:
+    """One raw folder: the real water sample and a fake 48-hour-old forecast."""
     raw = tmp_path / "raw"
     raw.mkdir()
     (raw / "water_2606_sample.csv").write_text((FIXTURES / "water_2606_sample.csv").read_text())
@@ -27,6 +28,11 @@ def test_parquet_file_gives_back_exactly_the_same_table(tmp_path):
         }
     )
     hours.to_csv(raw / "weather_geneva_prev2_2026-03-27_to_2026-03-31.csv", index=False)
+    return raw
+
+
+def test_parquet_file_gives_back_exactly_the_same_table(tmp_path):
+    raw = make_raw_folder(tmp_path)
     out = tmp_path / "features" / "features.parquet"  # the folder does not exist yet
 
     written = build_features.build(raw, out)
@@ -40,3 +46,17 @@ def test_parquet_file_gives_back_exactly_the_same_table(tmp_path):
     # its label is empty, because the sample ends on 30.03.
     assert read_back.loc[pd.Timestamp("2026-03-30"), features.FEATURES].notna().all()
     assert pd.isna(read_back.loc[pd.Timestamp("2026-03-30"), features.LABEL])
+
+
+def test_the_command_line_saves_the_table_and_reports_it(tmp_path, monkeypatch, capsys):
+    # The way the daily job and the Docker image start this step: through main().
+    raw = make_raw_folder(tmp_path)
+    out = tmp_path / "table.parquet"
+    monkeypatch.setattr(sys, "argv", ["build_features", "--raw", str(raw), "--out", str(out)])
+
+    build_features.main()
+
+    assert out.exists()
+    # The log line of the daily job names the size of the table.
+    days = len(pd.read_parquet(out))
+    assert f"Saved {days} days" in capsys.readouterr().out
