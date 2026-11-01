@@ -51,6 +51,8 @@ Units in the raw files: `water_temp_c` °C, `flow_m3s` m³/s, `temperature_2m` �
 - **BAFU's newest 10-minute values are about 1.5 hours old** (measured on 27.10 and 30.10.2026), so the daily job runs at 19:00 UTC, well after the cutoff.
 - **Weather history:** the 48-hour-old sunshine and wind exist from 20.01.2024 13:00 (air temperature from 2022). The 06:00 UTC single runs exist from 10.08.2024; one run is missing in the archive (05.08.2025); the first hour of every run has no sunshine value.
 - **Clock-change days** have 23 or 25 hours (138 or 150 readings) and count as complete.
+- **Impossible values:** water temperature outside 0 to 35 °C or flow outside -50 to 1500 m³/s becomes an empty cell, with a warning in the log (`load_water()` in `features.py`). The limits are wide on purpose: on 01.11.2026 no raw reading was outside them (4.6 to 27.7 °C, -14.9 to 642.9 m³/s), so the rule changes no table today. 22 raw flow readings are negative, and they stay in the data.
+- **A table that is too old:** the daily job turns red if the newest row with all features is more than 2 days old (`check_fresh.py`).
 - **Extreme but real values:** `water_trend_3d` goes from -11.5 °C (upwelling after south-west wind, 5-8 July 2025) to +9.6 °C (June 2024).
 
 ## Versions
