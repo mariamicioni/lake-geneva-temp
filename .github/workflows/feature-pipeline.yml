@@ -6,7 +6,8 @@
 #   2. downloads the newest water readings and weather forecasts,
 #   3. rebuilds the whole feature table (src/lakegeneva/common/features.py),
 #   4. stores everything in the bucket (dvc push) and
-#   5. commits the two small pointer files, so every day is one data version in Git.
+#   5. commits the two small pointer files, so every day is one data version in Git,
+#   6. checks that the new table is not too old (otherwise the job turns red).
 name: Feature pipeline
 
 on:
@@ -128,3 +129,11 @@ jobs:
             git pull --rebase origin main
             git push origin HEAD:main
           fi
+
+      # 10. A source can keep sending old data without any error, and then all steps
+      #     above stay green. This step fails if the newest row with all features is
+      #     more than 2 days old, so the job turns red and GitHub sends an email. It
+      #     comes last, so the files of this run are already saved.
+      - name: Check that the data is fresh
+        if: always() && steps.build.outcome == 'success'
+        run: uv run --locked --no-dev python -m lakegeneva.features.check_fresh
