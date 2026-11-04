@@ -28,7 +28,9 @@ TARGET_GAIN = 0.20
 # The test days (review point A1): the first year with all features (21.01.2024
 # to 20.01.2025) is for validation, to choose the model settings in MS3, so it
 # never counts for the target. Only the days from here on count, and on each of
-# them the model is trained again on all days before it (walk-forward).
+# them the model is trained again on the earlier days whose label is already
+# known at 18:00 (walk-forward). The day just before is not used: its label is
+# the mean of the test day itself, and that day is not over at 18:00.
 TEST_START = pd.Timestamp("2025-01-21")
 # Bootstrap: blocks of 7 days, 2,000 new test sets, a fixed seed (the same
 # interval on every run).
