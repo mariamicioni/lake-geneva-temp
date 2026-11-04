@@ -19,8 +19,8 @@ Every evening on day D the model predicts the mean water temperature of D+1 from
 
 The model succeeds if its MAE is **at least 20 % lower than the MAE of the stronger baseline, on the same days**:
 - **Main target:** the test days from 21.01.2025 on. For each test day the model is trained again on the earlier days whose label is already known at 18:00 of that day (walk-forward evaluation in MS3). The day just before is not used, because its label is the mean of the test day itself. The first year with all features (21.01.2024–20.01.2025, 366 days) is for validation: it is used to choose the model settings and never counts for the target.
-- **Target on the big-change days:** the test days on which the temperature changes by more than 0.8 °C, where persistence fails.
-- **Reported, not a target:** October–January (only 6 big-change test days, and there plain and trend-adjusted persistence are equally good) and the live period October 2026 – January 2027 (monitoring in MS4).
+- **Target on the big-change days:** the test days on which tomorrow's mean differs by more than 0.8 °C from today's last reading before 18:00. On these days persistence fails.
+- **Reported, not a target:** October–January (159 test days, on which plain and trend-adjusted persistence are about equally good; only 6 of them are big-change days, too few for a target) and the live period October 2026 – January 2027 (monitoring in MS4).
 
 The stronger baseline is plain persistence, the last reading before 18:00. Trend-adjusted persistence (the last reading plus a third of the 3-day trend, suggested in the MS1 reviews) is worse:
 
@@ -46,7 +46,7 @@ What is specific here: the outflow of a large lake. Its huge heat store makes pe
 ## The feature pipeline
 Every evening (`.github/workflows/feature-pipeline.yml`, 19:00 UTC):
 1. `dvc pull` gets the current data version from the bucket.
-2. The download scripts add the newest water readings and forecasts to `data/raw/` (each one overlaps the last 7 days, so a missed day is filled in). They never overwrite a file: a second run on the same day writes its own file.
+2. The download scripts add the newest water readings and forecasts to `data/raw/`. The water download and the two archived forecasts always cover the last 7 days, so a missed day is filled in. The newest forecast (audit copy) covers only today and the next 2 days. No script overwrites a file: a second run on the same day writes its own file.
 3. `build_features.py` rebuilds the whole daily feature table with the one shared feature definition in `src/lakegeneva/common/features.py` and saves it as `data/features/features.parquet`.
 4. `dvc push` stores the data in the bucket, and the job commits the two pointer files: one data version per day.
 5. `check_fresh.py` turns the job red if the newest row with all features is more than 2 days old, so a source that keeps sending old data does not stay unnoticed.
