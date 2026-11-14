@@ -127,6 +127,23 @@ def test_the_test_days_never_choose_the_setting(monkeypatch):
     assert train.choose_alpha(changed, features.FEATURES) == (alpha, errors)
 
 
+def test_the_setting_uses_only_labels_known_at_the_first_test_forecast(monkeypatch):
+    monkeypatch.setattr(train, "MIN_TRAIN_ROWS", 20)
+    monkeypatch.setattr(train, "ALPHAS", (0.1, 1000.0))
+    rows = fake_rows(80, start="2024-12-01")
+    alpha, errors = train.choose_alpha(rows, features.FEATURES)
+
+    # The label of the day before TEST_START is the mean of the first test day, which
+    # is not over at 18:00 on that day: changing it must not change the setting.
+    changed = rows.copy()
+    changed.loc[baselines.TEST_START - pd.Timedelta(days=1), features.LABEL] += 100
+    assert train.choose_alpha(changed, features.FEATURES) == (alpha, errors)
+
+    # The label of TEST_START - 2 (the mean of the day before) is known: it counts.
+    changed.loc[baselines.TEST_START - pd.Timedelta(days=2), features.LABEL] += 100
+    assert train.choose_alpha(changed, features.FEATURES)[1] != errors
+
+
 def test_model_rows_need_all_features_and_a_label():
     rows = fake_rows(3)
     rows.iloc[0, rows.columns.get_loc("air_temp_fc_d1")] = np.nan  # a missing forecast

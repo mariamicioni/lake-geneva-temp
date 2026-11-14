@@ -124,8 +124,12 @@ def mae(rows: pd.DataFrame, forecast: pd.Series) -> float:
 
 def choose_alpha(rows: pd.DataFrame, columns: list[str]) -> tuple[float, dict]:
     """The penalty with the lowest walk-forward error on the validation year."""
-    # Only days before TEST_START: the test days never decide a setting of the model.
-    validation_days = rows.index[rows.index < baselines.TEST_START]
+    # The setting must be fixed before the first test forecast (18:00 on TEST_START),
+    # so it may only use labels that are known then: the rows up to TEST_START - 2.
+    # The row of TEST_START - 1 (20.01.2025) is left out: its label is the mean of the
+    # first test day itself, which is not over at 18:00 (found in a review on
+    # 14.11.2026; alpha stayed 1000 for both models). The test days never count either.
+    validation_days = known_at_18(rows, baselines.TEST_START).index
     errors = {alpha: mae(rows, walk_forward(rows, columns, alpha, validation_days)) for alpha in ALPHAS}
     # min(..., key=errors.get): the alpha whose error is the smallest.
     return min(errors, key=errors.get), errors
