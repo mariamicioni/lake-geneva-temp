@@ -93,11 +93,28 @@ def test_data_version_is_unknown_without_the_dvc_list(tmp_path):
     assert version["data_md5"] == "unknown"
 
 
-def test_target_tag_follows_the_success_criterion():
-    met = pd.DataFrame({"model": [0.40], "target": [0.42]}, index=["test, all year"])
-    missed = pd.DataFrame({"model": [0.44], "target": [0.42]}, index=["test, all year"])
-    assert track.meets_target(met)
-    assert not track.meets_target(missed)
+def two_targets(all_days: float, big_change: float) -> pd.DataFrame:
+    """An evaluation table with the model's MAE in both windows; targets 0.42 and 1.54."""
+    return pd.DataFrame(
+        {"model": [all_days, big_change], "target": [0.42, 1.54]},
+        index=["test, all year", "test, change > 0.8"],
+    )
+
+
+def test_target_is_met_only_when_both_targets_are_met():
+    assert track.meets_target(two_targets(0.40, 1.50))
+    # The mixed results: one target met, the other missed. Neither counts as met.
+    assert not track.meets_target(two_targets(0.40, 1.60))  # good overall, misses the big-change days
+    assert not track.meets_target(two_targets(0.44, 1.50))  # good on big-change days, misses overall
+    assert not track.meets_target(two_targets(0.44, 1.60))
+
+
+def test_target_is_not_met_when_a_window_was_not_tested():
+    # Only the all-days row: the big-change target cannot be judged, so it is not met.
+    only_all_days = pd.DataFrame({"model": [0.40], "target": [0.42]}, index=["test, all year"])
+    assert not track.meets_target(only_all_days)
+    # A window without an MAE (no big-change test days) is not met either.
+    assert not track.meets_target(two_targets(0.40, float("nan")))
 
 
 def test_flat_metrics_names_every_number_and_skips_empty_ones():

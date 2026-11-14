@@ -159,9 +159,18 @@ def log_run(name: str, result: dict, rows: pd.DataFrame, versions: dict) -> str:
 
 
 def meets_target(evaluation: pd.DataFrame) -> bool:
-    """The success criterion of the README: at least 20 % lower MAE than persistence on all test days."""
-    row = evaluation.loc["test, all year"]
-    return bool(row.get("model") <= row.get("target"))
+    """The success criterion of the README: 20 % below persistence on all test days AND on the big-change days."""
+    # The README has two targets, and both must be met (found in a review on 14.11.2026:
+    # the first version checked only all test days). A window that is missing or has
+    # no MAE counts as not met: a target cannot be met on days that were not tested.
+    for window in ("test, all year", "test, change > 0.8"):
+        if window not in evaluation.index:
+            return False
+        row = evaluation.loc[window]
+        model, target = row.get("model"), row.get("target")
+        if model is None or target is None or pd.isna(model) or pd.isna(target) or model > target:
+            return False
+    return True
 
 
 def register(model_uri: str, promote: bool, target_met: bool = False) -> str:
