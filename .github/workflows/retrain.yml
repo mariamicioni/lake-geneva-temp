@@ -1,0 +1,77 @@
+# Based on the MLOps HS26 Block 1 exercise, Parts A (DVC) and D (CI with uv), F. Bär [5]
+# in README.md, like feature-pipeline.yml; the weekly policy follows the SW09 retrain
+# question, M. Bravin [14].
+#
+# The training pipeline, once a week on GitHub's machines: the "T" of the FTI
+# architecture retrains on its own, not by hand. One run:
+#   1. gets the newest feature table from the GCS bucket (dvc pull),
+#   2. trains the model and tests it day by day (src/lakegeneva/training/train.py),
+#   3. logs both models to MLflow on DagsHub and registers the full one; the alias
+#      "champion" moves to it only if it passes the gate (src/lakegeneva/training/track.py).
+# Nothing is committed: the result lives in MLflow, not in Git.
+name: Retrain
+
+on:
+  schedule:
+    # Cron format: minute hour day-of-month month day-of-week, always in UTC.
+    # Every Monday at 06:00 UTC, after the feature pipeline of Sunday evening has stored
+    # Sunday's data. Why weekly: retraining every day and every week gave the same
+    # error on the test days (0.437 degC both, experiments.py, 14.11.2026), and never
+    # retraining was worse on the big-change days (1.645 against 1.547 degC).
+    - cron: "0 6 * * 1"
+  workflow_dispatch:        # allows a manual run from the Actions tab
+
+# Never two trainings at the same time: both would register a version and move the alias.
+concurrency:
+  group: retrain
+  cancel-in-progress: false
+
+# The job only reads the repository; it writes to the bucket's cache and to DagsHub, not to Git.
+permissions:
+  contents: read
+
+jobs:
+  train:
+    runs-on: ubuntu-latest  # a fresh Linux machine from GitHub, deleted after the run
+    timeout-minutes: 30     # training takes about 2 minutes; stop a hanging run
+    steps:
+      # 1. The code and the pointer files. fetch-depth: 0 gets the whole history, so
+      #    track.py can name the commit that stored the data version (git log).
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      # 2. uv installs Python and the exact package versions from uv.lock, WITH the dev
+      #    group: MLflow is there (it is a training tool, so it is not in the image).
+      - uses: astral-sh/setup-uv@v10.2.0
+        with:
+          enable-cache: true
+      - name: Install the exact versions from uv.lock (with MLflow)
+        run: uv sync --locked
+
+      # 3. DVC and the bucket key, as in feature-pipeline.yml: the key comes from the
+      #    secret GCP_SA_KEY into a file in the machine's temp folder, never into Git.
+      - name: Install DVC
+        run: uv tool install "dvc[gs]==3.67.1"
+      - name: Give DVC the bucket key
+        env:
+          GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }}
+        run: |
+          printf '%s' "$GCP_SA_KEY" > "$RUNNER_TEMP/gcp-key.json"
+          dvc remote modify --local storage credentialpath "$RUNNER_TEMP/gcp-key.json"
+
+      # 4. Only the feature table: training never reads the raw files. dvc pull also
+      #    puts DVC's file list of this version into the cache, which track.py uses to
+      #    prove that the table is this data version.
+      - name: Get the newest feature table from the bucket
+        run: dvc pull data/features.dvc
+
+      # 5. Train, test, log and register. The DagsHub token comes from the secret
+      #    MLFLOW_TRACKING_PASSWORD; GitHub hides it in the log. The address and the
+      #    user name are not secret.
+      - name: Train, test and register the model
+        env:
+          MLFLOW_TRACKING_URI: https://dagshub.com/mariamicioni/lake-geneva-temp.mlflow
+          MLFLOW_TRACKING_USERNAME: mariamicioni
+          MLFLOW_TRACKING_PASSWORD: ${{ secrets.MLFLOW_TRACKING_PASSWORD }}
+        run: uv run --locked python src/lakegeneva/training/train.py
