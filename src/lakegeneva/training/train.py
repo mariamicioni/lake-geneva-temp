@@ -175,8 +175,10 @@ def train_final(rows: pd.DataFrame, columns: list[str], alpha: float):
     # The feature table only has a label once tomorrow is over, so every row here is
     # already known. On the evening of day D the newest row with a label is D-2, so
     # this is exactly the model that the walk-forward test uses for day D.
-    # Plain arrays, like in walk_forward(), so the final model is the same kind of model.
-    return make_model(alpha).fit(rows[columns].to_numpy(), change(rows).to_numpy())
+    # Trained on the table (not plain arrays like in walk_forward()): the model then
+    # keeps the column names, so the live forecast can check that it gets the right
+    # columns in the right order. The numbers are the same either way.
+    return make_model(alpha).fit(rows[columns], change(rows))
 
 
 def run(table: pd.DataFrame) -> dict:
@@ -204,6 +206,7 @@ def main() -> None:
     parser.add_argument(
         "--features", default="data/features/features.parquet", help="the feature table (the feature store)"
     )
+    parser.add_argument("--no-mlflow", action="store_true", help="train and test only, log nothing")
     args = parser.parse_args()
 
     # The training pipeline reads the stored table, not the raw files: the feature
@@ -219,6 +222,14 @@ def main() -> None:
         ridge = result["model"][-1]
         coefficients = pd.Series(ridge.coef_, index=result["columns"]).round(3)
         print("coefficients:", coefficients.to_dict())
+
+    if not args.no_mlflow:
+        # Log both models with the code and data versions, register the full model and
+        # promote it if it passes the gate (track.py).
+        from lakegeneva.training import track
+
+        print()
+        track.track(results, model_rows(table))
 
 
 # Runs main() only when the file is started as a script, not when it is imported

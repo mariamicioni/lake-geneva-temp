@@ -21,6 +21,8 @@ venv/
 # ... except the small test sample (4 days of real BAFU readings) used by the tests
 !tests/fixtures/*.csv
 mlruns/
+# the local MLflow database (runs without DagsHub)
+mlflow.db
 mlartifacts/
 models/
 *.pkl

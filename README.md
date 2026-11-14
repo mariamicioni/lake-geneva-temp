@@ -58,7 +58,7 @@ Data and models are never stored in Git; Git only holds code, configuration and 
 - **Raw data and features (MS2):** versioned with DVC [5]. The files are in the private Google Cloud Storage bucket `gs://lake-geneva-temp-data` (folder `dvc/`); Git holds only the pointer files `data/raw.dvc` (all raw downloads) and `data/features.dvc` (the feature table `features.parquet`, built by `src/lakegeneva/features/build_features.py`). Every commit of the pointer files is one data version. The tag `data-v1` marks the first one: the raw data until 27.10.2026 and the first feature table.
 - **Get the data** (needs a key of the bucket's service account): see "How to run" below. Without a key, the tests still run on the sample in `tests/fixtures/`, the Docker image still runs the whole pipeline on the last 7 days, and the backfill commands rebuild the whole feature table from the public APIs (see "How to run").
 - **Daily update:** the feature pipeline commits the two pointer files as `github-actions[bot]` ("chore(data): daily update ..."). So every day is one data version in Git, and from MS3 on every model can name the data it was trained on.
-- **Models (MS3, in progress):** `src/lakegeneva/training/train.py` trains the model and tests it day by day, but does not store it yet. Planned: MLflow tracking and model registry hosted on DagsHub (alias `champion` = model in production). There is no MLflow code yet.
+- **Models (MS3):** `src/lakegeneva/training/train.py` trains the model, tests it day by day and logs every run to MLflow (`src/lakegeneva/training/track.py`): the git commit, the data version (the md5 of `data/features.dvc`), the settings, the test results and the model. The full model is registered as a new version of `lake-geneva-temp`; the alias `champion` (the model for the live forecast in MS4) moves to it only if its whole 95 % interval against persistence is below 0. Host: DagsHub, [experiments](https://dagshub.com/mariamicioni/lake-geneva-temp/experiments) (`MLFLOW_TRACKING_URI`, user name and token in `.env`, see `.env.example`); without it the runs go to a local `mlflow.db` and `mlruns/` (not in Git).
 
 ## How to run
 Set up and test (Python 3.12 and the exact package versions from `uv.lock`; the tests need no data and no internet):
@@ -87,7 +87,9 @@ All downloads and the table at once (this is what the Docker image starts): `uv 
 
 The training pipeline (needs the feature table and, for the forecast comparison, the raw files: after `dvc pull` or the backfill):
 ```bash
-uv run python src/lakegeneva/training/train.py         # train the model and test it day by day (about 1 minute)
+uv run --env-file .env python src/lakegeneva/training/train.py   # train, test day by day, log to MLflow on DagsHub and register (about 2 minutes)
+uv run python src/lakegeneva/training/train.py                   # the same without .env: the runs go to a local mlflow.db (--no-mlflow: log nothing)
+uv run mlflow ui                                                 # the local runs and models, at http://localhost:5000
 uv run python src/lakegeneva/training/experiments.py   # model ladder, how much data, how often to retrain, forecast comparison (about 2 minutes)
 ```
 
@@ -115,7 +117,7 @@ On Linux the user in the container must be allowed to write to `out/`: run `mkdi
 ```
 src/lakegeneva/
   features/    feature pipeline (ingest, backfill, build the table)
-  training/    training pipeline (read the feature table, train, test walk-forward; MLflow follows)
+  training/    training pipeline (read the feature table, train, test walk-forward, log and register with MLflow)
   inference/   inference pipeline, empty until MS4 (load model, predict, serve)
   common/      shared code: feature definition, baselines, names of the raw files, weather location
 tests/         unit tests (run in CI); fixtures/ holds the small test sample
@@ -151,6 +153,7 @@ I build this project on what the MLOps HS26 course teaches. When a file follows 
 | `src/lakegeneva/common/baselines.py` | Trend-adjusted persistence and bootstrap interval suggested in the MS1 reviews (A1, A2/B2); moving-block bootstrap [8] | Written for this project |
 | `src/lakegeneva/training/train.py` | Ridge regression and scaling from the scikit-learn documentation [13]; walk-forward test as planned in the MS2 summary (review points A1, B2) | Written for this project |
 | `src/lakegeneva/training/experiments.py` | SW09 lecture, "Your pipeline": baseline ladder, how much data, how often to retrain [14] | Own experiments on this project's data; the lecture's scripts are not used |
+| `src/lakegeneva/training/track.py` | Block 1 exercise solution, `train.py`: log the parameters, the git commit, the metrics and the model; register it; alias `champion` [5] | The DVC data version is logged too; the evaluation tables are saved with each run; a gate decides about the alias |
 | `DATACARD.md` | Block 1 lecture: document column names, dtypes and missing-value handling in a DATACARD.md [4] | Written for this project |
 
 **AI use:** Anthropic Claude helped me write and test the code and the documentation. 
