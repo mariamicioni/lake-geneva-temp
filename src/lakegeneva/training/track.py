@@ -21,6 +21,8 @@ it only if it passes the promotion gate (see passes_gate below).
 # image of the feature pipeline does not need it. That is why it is imported inside the
 # functions and not at the top of this file.
 
+import hashlib  # md5 of the feature file that was really used
+import json  # reads the DVC list of files of a data version
 import subprocess  # runs git to find the code and data versions
 from pathlib import Path  # the path of the DVC pointer file
 
@@ -33,6 +35,8 @@ MODEL_NAME = "lake-geneva-temp"
 CHAMPION = "champion"
 # The DVC pointer of the feature table: its md5 is the version of the training data.
 FEATURES_POINTER = Path("data/features.dvc")
+# Where DVC keeps its list of the files of each data version (default cache of DVC 3).
+DVC_CACHE = Path(".dvc/cache/files/md5")
 # Short metric names for the windows of train.evaluate().
 WINDOW_NAMES = {"test, all year": "test", "test, change > 0.8": "big_change", "test, Oct-Jan": "oct_jan"}
 COLUMN_NAMES = {
@@ -66,16 +70,38 @@ def git_commit() -> str:
     return commit + ("-dirty" if changed else "")
 
 
-def data_version(pointer: Path = FEATURES_POINTER) -> dict:
-    """The version of the feature table: its DVC md5 and the commit that stored that pointer."""
-    # The pointer file is short YAML; its line "- md5: <hash>.dir" names the data
-    # version. `dvc checkout` after `git checkout <data_commit>` gives back this table.
-    md5 = ""
+def file_md5(path: Path) -> str:
+    """The md5 of a file's bytes (the same number DVC uses for a file)."""
+    return hashlib.md5(Path(path).read_bytes()).hexdigest()
+
+
+def data_version(features: Path, pointer: Path = FEATURES_POINTER, cache: Path = DVC_CACHE) -> dict:
+    """Which data trained the model: the file really used, and its DVC version if it is one."""
+    # Always true: the name and the md5 of the file that was read.
+    features = Path(features)
+    version = {"features_file": features.as_posix(), "features_md5": file_md5(features)}
+    # The DVC version is claimed only if it is proven: the pointer names a list of
+    # files (its line "- md5: <hash>.dir"), DVC keeps that list in its cache, and the
+    # file used must be in that list with the same md5. Otherwise a run with another
+    # table (--features) or a changed local table would name the wrong data version
+    # (found in a review on 14.11.2026).
+    dir_md5 = ""
     if pointer.exists():
         for line in pointer.read_text(encoding="utf-8").splitlines():
             if line.strip().startswith("- md5:"):
-                md5 = line.split(":", 1)[1].strip()
-    return {"data_md5": md5 or "unknown", "data_commit": git("log", "-1", "--format=%H", "--", str(pointer)) or "unknown"}
+                dir_md5 = line.split(":", 1)[1].strip()
+    listing = cache / dir_md5[:2] / dir_md5[2:] if dir_md5 else None
+    if listing is None or not listing.exists():
+        return version | {"data_md5": "unknown", "data_commit": "unknown", "data_matches_dvc": "unknown"}
+    expected = {entry["relpath"]: entry["md5"] for entry in json.loads(listing.read_text(encoding="utf-8"))}
+    if expected.get(features.name) != version["features_md5"]:
+        return version | {"data_md5": "not a DVC version", "data_commit": "none", "data_matches_dvc": "no"}
+    # `git checkout <data_commit>` and then `dvc checkout` give back exactly this table.
+    data_commit = git("log", "-1", "--format=%H", "--", str(pointer)) or "unknown"
+    # A pointer changed after its last commit is not yet a version anyone can check out.
+    if git("status", "--porcelain", "--", str(pointer)):
+        data_commit = "not committed"
+    return version | {"data_md5": dir_md5, "data_commit": data_commit, "data_matches_dvc": "yes"}
 
 
 def flat_metrics(evaluation: pd.DataFrame) -> dict:
@@ -132,7 +158,13 @@ def log_run(name: str, result: dict, rows: pd.DataFrame, versions: dict) -> str:
         return info.model_uri
 
 
-def register(model_uri: str, promote: bool) -> str:
+def meets_target(evaluation: pd.DataFrame) -> bool:
+    """The success criterion of the README: at least 20 % lower MAE than persistence on all test days."""
+    row = evaluation.loc["test, all year"]
+    return bool(row.get("model") <= row.get("target"))
+
+
+def register(model_uri: str, promote: bool, target_met: bool = False) -> str:
     """Register the model as a new version; move the alias "champion" to it if it passed the gate."""
     import mlflow
 
@@ -140,24 +172,30 @@ def register(model_uri: str, promote: bool) -> str:
     version = str(mlflow.register_model(model_uri, MODEL_NAME).version)
     client = mlflow.MlflowClient()
     client.set_model_version_tag(MODEL_NAME, version, "gate", "passed" if promote else "failed")
+    # The gate is not the success criterion: a champion is clearly better than
+    # persistence, but it may still miss the 20 % target. This tag says which.
+    client.set_model_version_tag(MODEL_NAME, version, "target_20_percent", "met" if target_met else "not met")
     if promote:
         # Moving the alias is the promotion: the live forecast loads models:/<name>@champion.
         client.set_registered_model_alias(MODEL_NAME, CHAMPION, version)
     return version
 
 
-def track(results: dict, rows: pd.DataFrame) -> None:
+def track(results: dict, rows: pd.DataFrame, features: Path) -> None:
     """Log both models of train.run(); register the full model and promote it if it passes."""
     import mlflow
 
     mlflow.set_experiment(EXPERIMENT)
-    versions = {"git_commit": git_commit(), **data_version()}
+    # features: the table train.py really read (--features), for the data version.
+    versions = {"git_commit": git_commit(), **data_version(features)}
     for name, result in results.items():
         model_uri = log_run(name, result, rows, versions)
         # Only the full model is a candidate for the live forecast; the water-only model
         # is logged for the comparison (review point B2).
         if name == "full":
             promote = passes_gate(result["evaluation"])
-            version = register(model_uri, promote)
-            print(f"registered {MODEL_NAME} v{version}; gate {'passed: alias champion -> v' + version if promote else 'failed: champion unchanged'}")
+            target_met = meets_target(result["evaluation"])
+            version = register(model_uri, promote, target_met)
+            print(f"registered {MODEL_NAME} v{version}; gate {'passed: alias champion -> v' + version if promote else 'failed: champion unchanged'}; 20 % target {'met' if target_met else 'not met'}")
+    print(f"data: {versions['features_file']} (md5 {versions['features_md5'][:8]}), DVC version: {versions['data_matches_dvc']}")
     print(f"runs logged to {mlflow.get_tracking_uri()}")

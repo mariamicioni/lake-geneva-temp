@@ -1,6 +1,8 @@
 """Tests for the MLflow tracking and the model registry. Everything stays in a temporary folder."""
 # How to run: `uv run pytest` (locally) - CI runs the same on every push.
 # MLflow writes to a small database in tmp_path here, never to DagsHub.
+import json
+
 import mlflow
 import numpy as np
 import pandas as pd
@@ -21,12 +23,15 @@ def local_mlflow(tmp_path, monkeypatch):
 
 
 @pytest.fixture
-def trained(monkeypatch):
+def trained(monkeypatch, tmp_path):
     """train.run() on a small fake table across TEST_START, with small settings."""
     monkeypatch.setattr(train, "MIN_TRAIN_ROWS", 20)
     monkeypatch.setattr(train, "ALPHAS", (0.1, 100.0))
     table = fake_rows(100, start="2024-12-01")
-    return train.run(table), train.model_rows(table)
+    # The table as a file, like the feature store, so the run can name its md5.
+    features = tmp_path / "features.parquet"
+    table.to_parquet(features)
+    return train.run(table), train.model_rows(table), features
 
 
 def evaluation_with_interval(ci_high: float) -> pd.DataFrame:
@@ -43,13 +48,56 @@ def test_gate_promotes_only_a_model_that_is_clearly_better():
     assert not track.passes_gate(evaluation_with_interval(np.nan))
 
 
-def test_data_version_reads_the_md5_of_the_dvc_pointer(tmp_path):
+def fake_dvc(tmp_path, content: bytes):
+    """A feature file, a DVC pointer and the DVC list of files of that version."""
+    features = tmp_path / "features.parquet"
+    features.write_bytes(content)
     pointer = tmp_path / "features.dvc"
-    pointer.write_text("outs:\n- md5: abc123.dir\n  size: 1\n  path: features\n", encoding="utf-8")
+    pointer.write_text("outs:\n- md5: ab12cd.dir\n  path: features\n", encoding="utf-8")
+    cache = tmp_path / "cache"
+    (cache / "ab").mkdir(parents=True)
+    listing = [{"md5": track.file_md5(features), "relpath": "features.parquet"}]
+    (cache / "ab" / "12cd.dir").write_text(json.dumps(listing), encoding="utf-8")
+    return features, pointer, cache
 
-    assert track.data_version(pointer)["data_md5"] == "abc123.dir"
-    # A missing pointer does not stop training; the run says the version is unknown.
-    assert track.data_version(tmp_path / "missing.dvc")["data_md5"] == "unknown"
+
+def test_data_version_is_claimed_when_the_file_is_the_dvc_version(tmp_path):
+    features, pointer, cache = fake_dvc(tmp_path, b"the stored table")
+
+    version = track.data_version(features, pointer, cache)
+
+    assert version["data_md5"] == "ab12cd.dir"
+    assert version["data_matches_dvc"] == "yes"
+    assert version["features_md5"] == track.file_md5(features)
+
+
+def test_data_version_is_not_claimed_for_another_or_changed_table(tmp_path):
+    features, pointer, cache = fake_dvc(tmp_path, b"the stored table")
+    # The table was changed after DVC stored it (or another table was given).
+    features.write_bytes(b"a changed table")
+
+    version = track.data_version(features, pointer, cache)
+
+    assert version["data_matches_dvc"] == "no"
+    assert version["data_md5"] == "not a DVC version"
+    # The md5 of the file that was really used is still logged.
+    assert version["features_md5"] == track.file_md5(features)
+
+
+def test_data_version_is_unknown_without_the_dvc_list(tmp_path):
+    features, pointer, _ = fake_dvc(tmp_path, b"the stored table")
+
+    version = track.data_version(features, pointer, tmp_path / "empty_cache")
+
+    assert version["data_matches_dvc"] == "unknown"
+    assert version["data_md5"] == "unknown"
+
+
+def test_target_tag_follows_the_success_criterion():
+    met = pd.DataFrame({"model": [0.40], "target": [0.42]}, index=["test, all year"])
+    missed = pd.DataFrame({"model": [0.44], "target": [0.42]}, index=["test, all year"])
+    assert track.meets_target(met)
+    assert not track.meets_target(missed)
 
 
 def test_flat_metrics_names_every_number_and_skips_empty_ones():
@@ -64,9 +112,9 @@ def test_flat_metrics_names_every_number_and_skips_empty_ones():
 
 
 def test_a_run_logs_both_models_and_registers_the_full_one(local_mlflow, trained):
-    results, rows = trained
+    results, rows, features = trained
 
-    track.track(results, rows)
+    track.track(results, rows, features)
 
     runs = mlflow.search_runs(experiment_names=[track.EXPERIMENT])
     assert sorted(runs["tags.mlflow.runName"]) == ["full", "water_only"]
@@ -81,11 +129,11 @@ def test_a_run_logs_both_models_and_registers_the_full_one(local_mlflow, trained
 
 
 def test_the_champion_is_the_full_model_and_loads_back(local_mlflow, trained):
-    results, rows = trained
+    results, rows, features = trained
     # The fake data is easy to learn, so the full model passes the gate.
     assert track.passes_gate(results["full"]["evaluation"])
 
-    track.track(results, rows)
+    track.track(results, rows, features)
 
     loaded = mlflow.sklearn.load_model(f"models:/{track.MODEL_NAME}@{track.CHAMPION}")
     x = rows[train.FEATURES_FULL].tail(5)
@@ -95,12 +143,12 @@ def test_the_champion_is_the_full_model_and_loads_back(local_mlflow, trained):
 
 
 def test_a_model_that_fails_the_gate_does_not_take_the_alias(local_mlflow, trained, monkeypatch):
-    results, rows = trained
-    track.track(results, rows)  # version 1 passes and becomes the champion
+    results, rows, features = trained
+    track.track(results, rows, features)  # version 1 passes and becomes the champion
 
     # The next run fails the gate: it is registered as version 2, but the alias stays.
     monkeypatch.setattr(track, "passes_gate", lambda evaluation: False)
-    track.track(results, rows)
+    track.track(results, rows, features)
 
     champion = local_mlflow.get_model_version_by_alias(track.MODEL_NAME, track.CHAMPION)
     assert champion.version in (1, "1")

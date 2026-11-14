@@ -229,7 +229,7 @@ def main() -> None:
         from lakegeneva.training import track
 
         print()
-        track.track(results, model_rows(table))
+        track.track(results, model_rows(table), args.features)
 
 
 # Runs main() only when the file is started as a script, not when it is imported
