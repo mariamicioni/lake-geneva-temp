@@ -60,31 +60,52 @@ def big_change_days(table: pd.DataFrame) -> pd.Series:
 
 
 def bootstrap_mae_difference(errors_a, errors_b, block: int = BLOCK_DAYS, seed: int = SEED):
-    """MAE(a) - MAE(b) and its 95 % confidence interval (moving-block bootstrap)."""
+    """MAE(a) - MAE(b) and its 95 % confidence interval (moving-block bootstrap of calendar days)."""
     # The bootstrap answers "how sure are we about this difference?": it builds many
     # new test sets from the days we have (drawing with replacement) and looks at
     # how much the difference moves between them. Days are drawn in blocks of 7
-    # days in a row, because one windy week affects several days, so single days
+    # calendar days, because one windy week affects several days, so single days
     # are not independent (moving-block bootstrap, Künsch 1989, [8] in README.md).
-    # Careful: "in a row" means 7 rows of the table it gets. For a part of the days
-    # (e.g. only the big-change days) 7 rows can be far apart: up to 228 calendar days
-    # on 30.10.2026. Blocks of real calendar days moved the intervals by at most
-    # 0.016 °C and changed no conclusion, so this stays for MS2 and is fixed in MS3.
+    # Why calendar days and not 7 rows: for a part of the days (e.g. only the
+    # big-change days) 7 rows in a row can be months apart (up to 228 days on
+    # 30.10.2026), so they are no "week". A block is now 7 real days, and it holds
+    # only the days of the part that fall into that week (0 to 7 days). Promised in
+    # the MS2 summary; the effect on the intervals is in the commit message.
+    # The errors come with their dates (a pandas Series). A plain list of numbers
+    # counts as consecutive days.
+    errors_a, errors_b = pd.Series(errors_a, dtype=float), pd.Series(errors_b, dtype=float)
+    if isinstance(errors_a.index, pd.DatetimeIndex):
+        dates = errors_a.index
+    else:
+        dates = pd.date_range("2000-01-01", periods=len(errors_a), freq="D")
     # Per day: how much larger the error of a was than the error of b.
-    diff = np.asarray(errors_a, dtype=float) - np.asarray(errors_b, dtype=float)
-    n = len(diff)
-    block = min(block, n)  # a test set shorter than one block is one block
+    diff = errors_a.to_numpy() - errors_b.to_numpy()
+
+    # Each day as a number: 0 for the first day, 1 for the next calendar day, ...
+    offset = (dates - dates.min()).days.to_numpy()
+    span = int(offset.max()) + 1  # calendar days from the first to the last day
+    block = min(block, span)  # a part shorter than one block is one block
+    # Sum and count of the differences on every calendar day (0 on days not in the part).
+    day_sum = np.bincount(offset, weights=diff, minlength=span)
+    day_count = np.bincount(offset, minlength=span)
+    # Sum and count of every possible block of 7 calendar days, from its first day s:
+    # with cumulative sums, block s is "everything up to s + 7" minus "everything up to s".
+    cum_sum = np.concatenate([[0.0], np.cumsum(day_sum)])
+    cum_count = np.concatenate([[0], np.cumsum(day_count)])
+    block_sum = cum_sum[block:] - cum_sum[:-block]
+    block_count = cum_count[block:] - cum_count[:-block]
+
     rng = np.random.default_rng(seed)  # fixed seed: the same result every run
-    n_blocks = int(np.ceil(n / block))  # blocks needed to cover n days
-    # A random first day for every block of every new test set ...
-    starts = rng.integers(0, n - block + 1, size=(N_RESAMPLES, n_blocks))
-    # ... the 7 days of each block (start, start + 1, ..., start + 6), all blocks
-    # of a test set in one row, cut back to n days.
-    days = (starts[:, :, None] + np.arange(block)).reshape(N_RESAMPLES, -1)[:, :n]
-    # The mean difference in each of the 2,000 new test sets.
-    means = diff[days].mean(axis=1)
-    # 95 % of the new test sets give a difference between these two values.
-    low, high = np.percentile(means, [2.5, 97.5])
+    n_blocks = int(np.ceil(span / block))  # blocks needed to cover the calendar span
+    # A random first day for every block of every new test set.
+    starts = rng.integers(0, span - block + 1, size=(N_RESAMPLES, n_blocks))
+    # The mean difference of each new test set: all its days together, so a block
+    # with more days of the part counts more.
+    totals = block_count[starts].sum(axis=1)
+    means = block_sum[starts].sum(axis=1) / np.where(totals > 0, totals, np.nan)
+    # 95 % of the new test sets give a difference between these two values. A new
+    # test set without any day (only possible for a tiny part) is left out.
+    low, high = np.nanpercentile(means, [2.5, 97.5])
     return diff.mean(), low, high
 
 
