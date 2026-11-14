@@ -20,5 +20,7 @@ packages = ["src/lakegeneva"]
 
 [dependency-groups]
 dev = [
+    "mlflow>=3.18",
+    "pip>=26",
     "pytest>=9.1.1",
 ]
