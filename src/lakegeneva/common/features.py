@@ -271,6 +271,57 @@ def weather_features(hours: pd.DataFrame) -> pd.DataFrame:
     return table[WEATHER_FEATURES]
 
 
+def load_single_runs(raw_dir: Path | str = "data/raw") -> pd.DataFrame:
+    """Read all files of the 06:00 UTC model runs (ingest_weather_single.py), one row per run and hour."""
+    # These forecasts are not features of the model yet: experiments.py compares them
+    # with the 48-hour-old forecast (a promise of the MS2 summary).
+    paths = sorted(Path(raw_dir).glob("weather_geneva_single06_*.csv"))
+    if not paths:
+        raise FileNotFoundError(f"No single-run files (weather_geneva_single06_*.csv) in {raw_dir}")
+    hours = pd.concat([pd.read_csv(path) for path in paths], ignore_index=True)
+    for column in ("fetched_at_utc", "run_utc", "time_utc"):
+        hours[column] = pd.to_datetime(hours[column], utc=True)
+    # The same names as the 48-hour-old forecast, so weather_features() can use them.
+    hours = hours.rename(
+        columns={
+            "temperature_2m": TEMPERATURE,
+            "sunshine_duration": SUNSHINE,
+            "wind_speed_10m": WIND_SPEED,
+            "wind_direction_10m": WIND_DIRECTION,
+        }
+    )
+    # The daily downloads overlap: for each run, hour and column the newest download
+    # wins, and an empty cell never replaces a value (the same rule as in load_weather).
+    hours = hours.sort_values("fetched_at_utc")
+    hours = hours.groupby(["run_utc", "time_utc"], as_index=False)[
+        [TEMPERATURE, SUNSHINE, WIND_SPEED, WIND_DIRECTION]
+    ].last()
+    return hours.sort_values(["run_utc", "time_utc"]).reset_index(drop=True)
+
+
+def single_run_weather_features(runs: pd.DataFrame) -> pd.DataFrame:
+    """The five weather features of each issue day D, made from the 06:00 UTC run of D."""
+    # At 18:00 on day D the newest run is the one started at 06:00 UTC on D (published
+    # at about 12:00 UTC). The run of D+1 does not exist yet, so it is never used for D.
+    # The run of D starts at 06:00 UTC, so the night hours of D (before 06:00 UTC) come
+    # from the run of D-1, which was also published long before 18:00 on D.
+    by_run = {run: hours for run, hours in runs.groupby("run_utc")}
+    rows = {}
+    for run, hours in by_run.items():
+        previous = by_run.get(run - pd.Timedelta(days=1))
+        if previous is not None:
+            # Only the hours before this run started: the newer run wins for the rest.
+            hours = pd.concat([previous[previous["time_utc"] < run], hours])
+        hours = hours.assign(time_local=hours["time_utc"].dt.tz_convert(TIMEZONE))
+        # The run of D and the Swiss day D: 06:00 UTC is always on the same Swiss day.
+        day = run.tz_convert(TIMEZONE).tz_localize(None).normalize()
+        # The shared definition of the weather features, on the hours known at 18:00 on D.
+        daily = weather_features(hours)
+        if day in daily.index:
+            rows[day] = daily.loc[day]
+    return pd.DataFrame.from_dict(rows, orient="index").rename_axis("date")[WEATHER_FEATURES]
+
+
 def feature_table(raw_dir: Path | str = "data/raw") -> pd.DataFrame:
     """The full daily table: water features, weather features and the label."""
     water = water_features(load_water(raw_dir))

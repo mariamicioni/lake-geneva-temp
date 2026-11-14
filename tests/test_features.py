@@ -236,6 +236,71 @@ def forecast_hours(day: str, temperature=10.0, sunshine=1800.0, speed=10.0, dire
     )
 
 
+def write_run(folder, run_day: str, temperature=10.0, direction=225.0, name=None, fetched="2026-11-14T13:00:00+00:00"):
+    """A fake file with one 06:00 UTC model run: 48 hours, as ingest_weather_single.py saves it."""
+    run = pd.Timestamp(f"{run_day} 06:00", tz="UTC")
+    hours = pd.date_range(run, periods=48, freq="h")
+    table = pd.DataFrame(
+        {
+            "fetched_at_utc": fetched,
+            "run_utc": run.strftime("%Y-%m-%dT%H:%MZ"),
+            "time_utc": hours.strftime("%Y-%m-%dT%H:%M"),
+            "temperature_2m": temperature,
+            "sunshine_duration": 1800.0,
+            "wind_speed_10m": 10.0,
+            "wind_direction_10m": direction,
+        }
+    )
+    table.loc[0, "sunshine_duration"] = None  # the first hour of every run has no sunshine
+    table.to_csv(folder / (name or f"weather_geneva_single06_{run_day}.csv"), index=False)
+
+
+def test_single_runs_newest_download_wins_but_keeps_values(tmp_path):
+    write_run(tmp_path, "2025-01-15", temperature=10.0, name="weather_geneva_single06_a.csv",
+              fetched="2026-11-01T13:00:00+00:00")
+    # A newer download of the same run: another temperature, but no sunshine at all.
+    write_run(tmp_path, "2025-01-15", temperature=11.0, name="weather_geneva_single06_b.csv",
+              fetched="2026-11-02T13:00:00+00:00")
+    newer = pd.read_csv(tmp_path / "weather_geneva_single06_b.csv")
+    newer["sunshine_duration"] = None
+    newer.to_csv(tmp_path / "weather_geneva_single06_b.csv", index=False)
+
+    runs = features.load_single_runs(tmp_path)
+
+    # One run with 48 hours; the newest temperature, the sunshine of the older download.
+    assert len(runs) == 48
+    assert (runs[features.TEMPERATURE] == 11.0).all()
+    assert runs[features.SUNSHINE].iloc[1] == 1800.0
+
+
+def test_single_runs_use_the_run_of_the_same_day_never_the_next(tmp_path):
+    # Three runs with different temperatures. At 18:00 on 15.01 only the runs of 14.01
+    # and 15.01 exist; the run of 16.01 starts the next morning.
+    write_run(tmp_path, "2025-01-14", temperature=5.0)
+    write_run(tmp_path, "2025-01-15", temperature=10.0)
+    write_run(tmp_path, "2025-01-16", temperature=99.0)
+
+    table = features.single_run_weather_features(features.load_single_runs(tmp_path))
+
+    assert table.loc[pd.Timestamp("2025-01-15"), "air_temp_fc_d1"] == 10.0
+
+
+def test_single_runs_take_the_night_hours_of_today_from_the_run_before(tmp_path):
+    # Wind from the south-west (+10 km/h) in the run of 14.01, from the north-east
+    # (-10 km/h) in the run of 15.01. The Swiss day 15.01 starts at 23:00 UTC on 14.01:
+    # its 7 hours before 06:00 UTC come from the older run, the other 17 from the newer.
+    write_run(tmp_path, "2025-01-14", direction=225.0)
+    write_run(tmp_path, "2025-01-15", direction=45.0)
+
+    table = features.single_run_weather_features(features.load_single_runs(tmp_path))
+
+    assert table.loc[pd.Timestamp("2025-01-15"), "wind_sw_fc_d0"] == pytest.approx((7 * 10 - 17 * 10) / 24)
+    # The first run has no run before it: only 17 hours of its own day, fewer than 20,
+    # so no wind for today. Its forecast for tomorrow is complete.
+    assert pd.isna(table.loc[pd.Timestamp("2025-01-14"), "wind_sw_fc_d0"])
+    assert table.loc[pd.Timestamp("2025-01-14"), "air_temp_fc_d1"] == 10.0
+
+
 def test_weather_features_use_the_forecast_for_tomorrow():
     # Today 5 °C without sun; tomorrow 12 °C, 30 minutes of sun in every hour and
     # 10 km/h wind with one stronger hour at 15:00.
