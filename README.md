@@ -1,6 +1,6 @@
 # Lake Geneva Temperature Forecast
 
-The goal: predict tomorrow's mean water temperature of Lake Geneva at Geneva (BAFU station 2606, Rhône at Genève Halle de l'Île, where the lake drains). The forecast will be made every evening from the data measured before 18:00 and compared with persistence ("tomorrow = the temperature now"). What runs today is the feature pipeline, every evening. The model comes in MS3 and the live forecast in MS4.
+The goal: predict tomorrow's mean water temperature of Lake Geneva at Geneva (BAFU station 2606, Rhône at Genève Halle de l'Île, where the lake drains). The forecast will be made every evening from the data measured before 18:00 and compared with persistence ("tomorrow = the temperature now"). What runs today: the feature pipeline every evening and the training pipeline every Monday. The live forecast comes in MS4.
 
 Built as the MLOps HS26 semester project (HSLU) with the Feature / Training / Inference (FTI) pipeline architecture.
 
@@ -20,17 +20,17 @@ Every evening on day D the model predicts the mean water temperature of D+1 from
 The model succeeds if its MAE is **at least 20 % lower than the MAE of the stronger baseline, on the same days**:
 - **Main target:** the test days from 21.01.2025 on. For each test day the model is trained again on the earlier days whose label is already known at 18:00 of that day (walk-forward evaluation in MS3). The day just before is not used, because its label is the mean of the test day itself. The first year with all features (21.01.2024–20.01.2025, 366 days) is for validation: it is used to choose the model settings and never counts for the target. The same rule holds there: the settings use the validation days up to 19.01.2025, whose labels are known at 18:00 on the first test day.
 - **Target on the big-change days:** the test days on which tomorrow's mean differs by more than 0.8 °C from today's last reading before 18:00. On these days persistence fails.
-- **Reported, not a target:** October–January (159 test days, on which plain and trend-adjusted persistence are about equally good; only 6 of them are big-change days, too few for a target) and the live period October 2026 – January 2027 (monitoring in MS4).
+- **Reported, not a target:** October–January (177 test days on 14.11.2026, on which plain and trend-adjusted persistence do not differ clearly; only 7 of them are big-change days, too few for a target) and the live period October 2026 – January 2027 (monitoring in MS4).
 
 The stronger baseline is plain persistence, the last reading before 18:00. Trend-adjusted persistence (the last reading plus a third of the 3-day trend, suggested in the MS1 reviews) is worse:
 
-| Test days (21.01.2025–25.10.2026, 18:00 cutoff) | Days | Persistence MAE | Trend-adjusted MAE | Target MAE (−20 %) |
+| Test days (21.01.2025–12.11.2026, 18:00 cutoff) | Days | Persistence MAE | Trend-adjusted MAE | Target MAE (−20 %) |
 |---|---|---|---|---|
-| all test days | 643 | 0.532 °C | 0.722 °C | ≤ 0.425 °C |
-| change > 0.8 °C | 100 | 1.921 °C | 2.095 °C | ≤ 1.537 °C |
-| October–January (reported) | 159 | 0.276 °C | 0.279 °C | (0.221 °C) |
+| all test days | 661 | 0.526 °C | 0.723 °C | ≤ 0.421 °C |
+| change > 0.8 °C | 101 | 1.930 °C | 2.111 °C | ≤ 1.544 °C |
+| October–January (reported) | 177 | 0.281 °C | 0.328 °C | (0.225 °C) |
 
-Numbers of 27.10.2026 (every new day adds one test day); `python src/lakegeneva/common/baselines.py` recomputes them with 95 % bootstrap intervals [8]. The criterion changed since the proposal; `docs/ms2_summary.pdf` explains why (MS1 review points A1, A2/B2, B3).
+Numbers of 14.11.2026. Every new day adds one test day, so they move a little (on 27.10.2026, in the MS2 summary: 643 test days and a target of 0.425 °C). `python src/lakegeneva/common/baselines.py` recomputes them with 95 % bootstrap intervals [8] (blocks of 7 calendar days). The criterion changed since the proposal; `docs/ms2_summary.pdf` explains why (MS1 review points A1, A2/B2, B3).
 
 ## Related work and what is different here
 - **KTH ID2223 2025/26, "Water Temperature at Södertälje"** [10]: predicts the water temperature at bathing sites in Södertälje from municipality open data and Open-Meteo forecasts.
@@ -53,12 +53,43 @@ Every evening (`.github/workflows/feature-pipeline.yml`, 19:00 UTC):
 
 The rules that prevent leakage: every day is a Swiss calendar day (with summer time); the water features use only readings before 18:00 Swiss time, the weather features only forecasts made 48 hours earlier; the label (tomorrow's mean) needs at least 120 of the 144 readings, and tomorrow must be over. All columns, units and gap rules: [`DATACARD.md`](DATACARD.md).
 
+## The training pipeline
+Every Monday (`.github/workflows/retrain.yml`, 06:00 UTC), or by hand:
+1. `dvc pull data/features.dvc` gets the newest feature table from the bucket. Training never reads the raw files.
+2. `train.py` chooses the one setting of the model on the validation year. Then it tests the model day by day: for each test day a new model is trained only on the earlier days whose label was known at 18:00 (walk-forward).
+3. The model for the live forecast is trained on all days with a known label.
+4. `track.py` logs the run to MLflow on DagsHub: the git commit, the data version, the settings, the test results and the model. The full model is registered as a new version of `lake-geneva-temp`.
+5. The alias `champion` (the model that the live forecast will load in MS4) moves to the new version only if it passes the gate: the whole 95 % interval of its difference to persistence is below 0.
+
+The model is a Ridge regression [13]. It predicts tomorrow's change (tomorrow's mean minus the last reading before 18:00), and the forecast is the last reading plus that change.
+
+Results on the 661 test days (21.01.2025–12.11.2026), every row on the same days (`experiments.py`, numbers of 14.11.2026):
+
+| | MAE, all test days | MAE, change > 0.8 °C (101 days) | One training |
+|---|---|---|---|
+| 1 Persistence: the last reading before 18:00 | 0.526 °C | 1.930 °C | none |
+| 2 Trend-adjusted persistence | 0.723 °C | 2.111 °C | none |
+| 3 Persistence plus the average change so far | 0.467 °C | 1.768 °C | none |
+| 4 Ridge, water features only | 0.438 °C | 1.618 °C | about 4 ms |
+| 5 Ridge, all features (the registered model) | 0.437 °C | 1.547 °C | about 4 ms |
+| Target: 20 % below row 1 | ≤ 0.421 °C | ≤ 1.544 °C | |
+
+What the numbers say:
+- **Clearly better than persistence, but both targets are missed so far.** The model is 17 % better on all test days (95 % interval of the difference: −0.121 to −0.059 °C) and 19.9 % better on the big-change days (−0.467 to −0.312 °C), where it misses the target by 0.003 °C.
+- **Most of the gain is one number.** The last reading before 18:00 is an afternoon value: on average it is 0.31 °C warmer than tomorrow's mean. Row 3 corrects this without any feature and already gains 11 %. Against row 3 the model gains 6 % on all test days and 12.5 % on the big-change days (intervals −0.046 to −0.015 °C and −0.270 to −0.178 °C).
+- **The weather features help only on the big-change days** (MS1 review point B2). There the full model is 0.071 °C better than the water-only model (−0.102 to −0.042 °C). Over all test days the two are equal (−0.013 to +0.010 °C).
+- **All earlier days are used for training.** With only the last 12 months, the error on the big-change days is 1.605 °C instead of 1.547 °C.
+- **Retraining every week is enough.** A new model every day, every week or every month gives 0.437 °C. A model trained only once is worse on the big-change days (1.645 °C).
+- **The fresher forecast is not better.** With the 06:00 UTC run of the same day instead of the 48-hour-old forecast, the error is 0.438 against 0.440 °C on the 655 test days on which both exist. So the features stay as they are.
+
+Where to look: the runs and the registered model are public in the [MLflow pages on DagsHub](https://dagshub.com/mariamicioni/lake-geneva-temp.mlflow/) (no login needed). Every run names its git commit and its data version. With these two, `train.py` gives the same numbers again: checked on 14.11.2026 in a fresh clone for a run made on GitHub, where all 33 logged numbers were equal to 13 decimal places. The version tag `target_20_percent` says whether both targets are met; `champion` only means that the gate was passed. One training run on GitHub takes about 1.5 minutes.
+
 ## Where the data lives
 Data and models are never stored in Git; Git only holds code, configuration and small DVC pointer files. The only exception is a 4-day test sample of real BAFU readings in `tests/fixtures/` (22 KB), so that CI can test the feature code without the data.
 - **Raw data and features (MS2):** versioned with DVC [5]. The files are in the private Google Cloud Storage bucket `gs://lake-geneva-temp-data` (folder `dvc/`); Git holds only the pointer files `data/raw.dvc` (all raw downloads) and `data/features.dvc` (the feature table `features.parquet`, built by `src/lakegeneva/features/build_features.py`). Every commit of the pointer files is one data version. The tag `data-v1` marks the first one: the raw data until 27.10.2026 and the first feature table.
 - **Get the data** (needs a key of the bucket's service account): see "How to run" below. Without a key, the tests still run on the sample in `tests/fixtures/`, the Docker image still runs the whole pipeline on the last 7 days, and the backfill commands rebuild the whole feature table from the public APIs (see "How to run").
 - **Daily update:** the feature pipeline commits the two pointer files as `github-actions[bot]` ("chore(data): daily update ..."). So every day is one data version in Git, and from MS3 on every model can name the data it was trained on.
-- **Models (MS3):** `src/lakegeneva/training/train.py` trains the model, tests it day by day and logs every run to MLflow (`src/lakegeneva/training/track.py`): the git commit, the data version (the md5 of the feature table that was read, and its DVC version only if the two match), the settings, the test results and the model. The full model is registered as a new version of `lake-geneva-temp`; the alias `champion` (the model for the live forecast in MS4) moves to it only if its whole 95 % interval against persistence is below 0. That means clearly better than persistence, not the 20 % target: the version tag `target_20_percent` says whether the target is met. Host: DagsHub, [experiments](https://dagshub.com/mariamicioni/lake-geneva-temp/experiments) (`MLFLOW_TRACKING_URI`, user name and token in `.env`, see `.env.example`); without it the runs go to a local `mlflow.db` and `mlruns/` (not in Git). The training runs on its own every Monday at 06:00 UTC (`.github/workflows/retrain.yml`): in the replay of the test days, retraining every week was as good as every day (`experiments.py`).
+- **Models (MS3):** not in Git either. Every training run and every model version is in MLflow on DagsHub (tracking and registry), see "The training pipeline". Without a DagsHub login (`MLFLOW_TRACKING_URI`, user name and token in `.env`, see `.env.example`) the runs go to a local `mlflow.db` and `mlruns/` (not in Git).
 
 ## How to run
 Set up and test (Python 3.12 and the exact package versions from `uv.lock`; the tests need no data and no internet):
@@ -85,13 +116,21 @@ uv run python src/lakegeneva/common/baselines.py                # the two baseli
 ```
 All downloads and the table at once (this is what the Docker image starts): `uv run python src/lakegeneva/features/run_pipeline.py`
 
-The training pipeline (needs the feature table and, for the forecast comparison, the raw files: after `dvc pull` or the backfill):
+The training pipeline needs the feature table. Without a key, these three commands rebuild it from the public APIs in about 3 minutes (from 15.01.2024 is enough: the weather features start on 20.01.2024, so earlier days give no training row):
 ```bash
-uv run --env-file .env python src/lakegeneva/training/train.py   # train, test day by day, log to MLflow on DagsHub and register (about 2 minutes)
-uv run python src/lakegeneva/training/train.py                   # the same without .env: the runs go to a local mlflow.db (--no-mlflow: log nothing)
-uv run mlflow ui                                                 # the local runs and models, at http://localhost:5000
-uv run python src/lakegeneva/training/experiments.py   # model ladder, how much data, how often to retrain, forecast comparison (about 2 minutes)
+uv run python src/lakegeneva/features/ingest_water.py --start 2024-01-15
+uv run python src/lakegeneva/features/ingest_weather_runs.py --start 2024-01-15
+uv run python src/lakegeneva/features/build_features.py
 ```
+Then, or after `dvc pull`:
+```bash
+uv run python src/lakegeneva/training/train.py --no-mlflow   # train and test day by day, log nothing (about 1 minute)
+uv run python src/lakegeneva/training/train.py               # the same, logged to a local mlflow.db and mlruns/ (not in Git)
+uv run mlflow ui                                             # the local runs and models, at http://localhost:5000
+uv run python src/lakegeneva/training/experiments.py         # the table of results above and the three experiments (about 2 minutes)
+uv run --env-file .env python src/lakegeneva/training/train.py   # only with a DagsHub token in .env: log to DagsHub and register
+```
+The forecast comparison at the end of `experiments.py` also needs the 06:00 UTC runs: `uv run python src/lakegeneva/features/ingest_weather_single.py --start 2024-08-10` (about 5 minutes). Checked on 14.11.2026 in a fresh clone without a key: the rebuilt table gives 0.437 °C on all test days and 1.546 °C on the big-change days (the stored table: 0.437 and 1.547 °C).
 
 Backfill: the same scripts with a start date:
 ```bash
@@ -134,7 +173,7 @@ I build this project on what the MLOps HS26 course teaches. When a file follows 
 
 | File | Based on | What I changed |
 |---|---|---|
-| `.github/workflows/ci.yml` | Block 1 exercise, Part D and the image job of its solution [5] | No model training step yet; runs the unit tests, then builds the image without publishing it |
+| `.github/workflows/ci.yml` | Block 1 exercise, Part D and the image job of its solution [5] | No training on the real data (the tests train on small fake tables); runs the unit tests, then builds the image without publishing it |
 | `.github/workflows/feature-pipeline.yml` | Block 1 exercise, Parts A (DVC) and D (CI with uv) [5] | Runs on a schedule; pulls and pushes the data with DVC and commits the pointer files |
 | `.github/workflows/retrain.yml` | Block 1 exercise, Parts A (DVC) and D (CI with uv) [5]; weekly policy from the SW09 retrain question [14] | Runs every Monday; pulls only the feature table, trains, logs to MLflow on DagsHub and registers the model; commits nothing |
 | `pyproject.toml`, `uv.lock` | uv dependency management [4] | Own package layout under `src/lakegeneva/` |
