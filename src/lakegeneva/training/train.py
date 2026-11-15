@@ -85,6 +85,8 @@ def walk_forward(
     window_days: learn only from the rows of the last window_days days (None: all rows).
     retrain_every: train a new model only every this many days and keep using the last
     one in between (1: a new model every day).
+    A day gets no forecast only if no model exists yet. If a new model is due but its
+    window has too few rows (a gap in the data), the last model is kept.
     """
     # The two options are for experiments.py (how much data, how often to retrain).
     # train.py uses the defaults: all earlier rows, a new model for every day.
@@ -105,10 +107,17 @@ def walk_forward(
             start = 0
             if window_days is not None:
                 start = rows.index.searchsorted(day - pd.Timedelta(days=window_days), side="right")
-            if n - start < MIN_TRAIN_ROWS:
-                continue  # too few earlier rows to learn anything: no forecast for this day
-            model = make_model(alpha).fit(x[start:n], y[start:n])
-            trained_on = day
+            if n - start >= MIN_TRAIN_ROWS:
+                model = make_model(alpha).fit(x[start:n], y[start:n])
+                trained_on = day
+            elif model is None:
+                continue  # too few earlier rows and no older model: no forecast for this day
+            # Otherwise the window has too few rows (a gap in the data), but an older model
+            # exists: keep using it, as the live system keeps the champion until a new
+            # model is ready. Before, the day was skipped, so lines of experiments.py
+            # could be on different days without any error (found in a review on
+            # 15.11.2026; no effect on today's numbers, every line had 661 days).
+            # trained_on stays the same, so the next day tries a new model again.
         # A kept model was trained on day trained_on with the rows up to trained_on - 2,
         # which are also known on every later day, so keeping it never leaks.
         i = rows.index.get_loc(day)  # the position of the day to forecast

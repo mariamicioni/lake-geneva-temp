@@ -114,6 +114,21 @@ def test_a_kept_model_does_not_learn_from_newer_rows(monkeypatch):
     assert train.walk_forward(changed, features.FEATURES, 1.0, days)[days[-1]] != daily[days[-1]]
 
 
+def test_a_gap_in_the_window_keeps_the_last_model(monkeypatch):
+    monkeypatch.setattr(train, "MIN_TRAIN_ROWS", 10)
+    rows = fake_rows(80)
+    # A gap of 30 days in the data (rows 30 to 59 are missing).
+    rows = rows.drop(rows.index[30:60])
+
+    forecast = train.walk_forward(rows, features.FEATURES, 1.0, rows.index, window_days=20)
+
+    # Right after the gap, the last 20 days hold almost no rows, so no new model can
+    # be trained. The model of the last day before the gap is kept: every day from the
+    # first model on (day 11, see the test above) has a forecast (found in a review on
+    # 15.11.2026: before, the 11 days after the gap had none).
+    assert list(forecast.index) == list(rows.index[11:])
+
+
 def test_the_test_days_never_choose_the_setting(monkeypatch):
     monkeypatch.setattr(train, "MIN_TRAIN_ROWS", 20)
     monkeypatch.setattr(train, "ALPHAS", (0.1, 1000.0))
