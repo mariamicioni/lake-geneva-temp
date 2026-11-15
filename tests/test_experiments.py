@@ -65,12 +65,40 @@ def test_forecast_comparison_uses_only_days_with_both_forecasts(small):
     single = rows[features.WEATHER_FEATURES].copy()
     single.iloc[:10] = None
 
-    result = experiments.forecast_comparison(rows, single)
+    result, differences = experiments.forecast_comparison(rows, single)
 
     first, second = result.index
     # The same days for both, and with the same features the same error.
     assert result.loc[first, "test days"] == result.loc[second, "test days"]
     assert result.loc[first, "test MAE"] == pytest.approx(result.loc[second, "test MAE"])
+    # So the difference is 0, and its interval is exactly 0 too.
+    assert differences.loc["all test days", "days"] == result.loc[first, "test days"]
+    assert differences.loc["all test days", "diff"] == pytest.approx(0)
+    assert differences.loc["all test days", "ci_low"] == pytest.approx(0)
+    assert differences.loc["all test days", "ci_high"] == pytest.approx(0)
+
+
+def test_intervals_compare_the_rungs_of_the_ladder(small):
+    rows, test_days = small
+    alphas = {"full": 0.1, "water_only": 0.1}
+
+    result = experiments.intervals(rows, test_days, alphas)
+    ladder = experiments.ladder(rows, test_days, alphas)
+
+    # Three comparisons, each in the three windows of the README.
+    assert len(result) == 3 * 3
+    # The difference is the difference of the two MAEs in the ladder (the same days).
+    full_vs_water = result.loc[("5 all features - 4 water only", "all test days")]
+    expected = ladder.loc["5 Ridge, all features", "test MAE"] - ladder.loc["4 Ridge, water only", "test MAE"]
+    assert full_vs_water["diff"] == pytest.approx(expected)
+    # In the fake data only a weather feature matters: the full model is clearly
+    # better, so the whole interval is below 0.
+    assert full_vs_water["ci_high"] < 0
+    # Only 10 test days in October to January here: a difference, but no interval
+    # (fewer than 35 days would look far too sure).
+    oct_jan = result.loc[("5 all features - 4 water only", "Oct-Jan")]
+    assert oct_jan["days"] == 10
+    assert pd.isna(oct_jan["ci_low"])
 
 
 def test_learning_curve_and_retrain_cover_every_setting(small):

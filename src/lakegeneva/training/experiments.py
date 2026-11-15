@@ -9,6 +9,9 @@ answered on the test days from 21.01.2025, always with the walk-forward test of 
 4. Forecast: the 48-hour-old forecast (the features now) against the forecast of the
    06:00 UTC model run of the same day (a promise of the MS2 summary).
 
+Every difference that the README names comes with its 95 % interval, from the same
+bootstrap as the baselines, so every number of the README can be repeated.
+
     python src/lakegeneva/training/experiments.py
 """
 # Based on the MLOps HS26 SW09 lecture (Efficiency Techniques), "Your pipeline"
@@ -21,7 +24,7 @@ answered on the test days from 21.01.2025, always with the walk-forward test of 
 import argparse  # reads the command-line option --features
 import time  # perf_counter() measures how long training takes
 
-import numpy as np  # median of the measured times
+import numpy as np  # median of the measured times; np.ones for the "all test days" window
 import pandas as pd  # the daily feature table
 
 from lakegeneva.common import baselines, features  # the baselines and column names
@@ -44,6 +47,33 @@ def scores(rows: pd.DataFrame, forecast: pd.Series) -> dict:
         "test MAE": train.mae(rows, forecast),
         "change > 0.8 MAE": train.mae(rows, forecast[big.to_numpy()]),
     }
+
+
+def windows_of(part: pd.DataFrame) -> dict:
+    """The windows of the README as yes/no lists over the days of `part`."""
+    return {
+        "all test days": np.ones(len(part), dtype=bool),
+        "change > 0.8": baselines.big_change_days(part).to_numpy(),
+        # October to January by the day that is forecast (tomorrow), as in train.py.
+        "Oct-Jan": (part.index + pd.Timedelta(days=1)).month.isin([10, 11, 12, 1]),
+    }
+
+
+def difference(error_a: pd.Series, error_b: pd.Series, in_window) -> dict:
+    """MAE(a) - MAE(b) on the days in `in_window`: the gain of a in % and the 95 % interval."""
+    # Below 0 means that a is better. The interval says how sure that is: if it holds
+    # 0, the days cannot tell which one is better.
+    row = {"days": int(in_window.sum())}
+    if row["days"] > 0:
+        mae_a, mae_b = error_a[in_window].mean(), error_b[in_window].mean()
+        row |= {"diff": mae_a - mae_b, "gain_%": 100 * (1 - mae_a / mae_b)}
+    # The same rule as in train.evaluate(): with fewer than 35 days an interval would
+    # look far too sure, so there is none.
+    if row["days"] >= baselines.MIN_DAYS_BOOTSTRAP:
+        _, row["ci_low"], row["ci_high"] = baselines.bootstrap_mae_difference(
+            error_a[in_window], error_b[in_window]
+        )
+    return row
 
 
 def fit_seconds(rows: pd.DataFrame, columns: list[str], alpha: float) -> float:
@@ -91,6 +121,37 @@ def ladder(rows: pd.DataFrame, test_days, alphas: dict) -> pd.DataFrame:
     return pd.DataFrame(result).T
 
 
+def intervals(rows: pd.DataFrame, test_days, alphas: dict) -> pd.DataFrame:
+    """Question 1, continued: the differences between rungs, with their 95 % intervals."""
+    # Why: the README says e.g. "against row 3 the model gains 6 %" and gives an
+    # interval. Before, these intervals were computed by hand; now this function
+    # prints them (found in a review on 15.11.2026). The forecasts are the same as in
+    # ladder(); they are made again here (a few seconds), so ladder() stays simple.
+    part = rows.loc[test_days]
+    forecasts = {
+        "1 persistence": baselines.persistence(part),
+        "3 average change": average_change(rows, test_days),
+        "4 water only": train.walk_forward(rows, train.FEATURE_SETS["water_only"], alphas["water_only"], test_days),
+        "5 all features": train.walk_forward(rows, train.FEATURES_FULL, alphas["full"], test_days),
+    }
+    # The error of each rung on each test day (°C, without sign). reindex: the same
+    # days in the same order for every rung, so the yes/no lists of the windows fit.
+    errors = {name: (f.reindex(part.index) - part[features.LABEL]).abs() for name, f in forecasts.items()}
+    # The three comparisons of the README: is row 3 better than persistence (it would
+    # pass the gate without any feature), do the features beat row 3, and does the
+    # weather help on top of the water features?
+    pairs = [
+        ("3 average change", "1 persistence"),
+        ("5 all features", "3 average change"),
+        ("5 all features", "4 water only"),
+    ]
+    result = {}
+    for a, b in pairs:
+        for window, in_window in windows_of(part).items():
+            result[(f"{a} - {b}", window)] = difference(errors[a], errors[b], in_window)
+    return pd.DataFrame(result).T
+
+
 def learning_curve(rows: pd.DataFrame, test_days, alpha: float) -> pd.DataFrame:
     """Question 2: the full model trained on less data, on the same test days."""
     result = {}
@@ -109,8 +170,11 @@ def retrain_replay(rows: pd.DataFrame, test_days, alpha: float) -> pd.DataFrame:
     return pd.DataFrame(result).T
 
 
-def forecast_comparison(rows: pd.DataFrame, single: pd.DataFrame) -> pd.DataFrame:
-    """Question 4: the same model with the weather features from the 06:00 UTC run instead."""
+def forecast_comparison(rows: pd.DataFrame, single: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Question 4: the same model with the weather features from the 06:00 UTC run instead.
+
+    Returns the error of each variant, and the difference between them with its interval.
+    """
     # The same water features and labels; only the five weather columns are replaced.
     with_single = rows.copy()
     with_single[features.WEATHER_FEATURES] = single.reindex(rows.index)[features.WEATHER_FEATURES]
@@ -121,14 +185,23 @@ def forecast_comparison(rows: pd.DataFrame, single: pd.DataFrame) -> pd.DataFram
         "48-hour-old forecast (the features now)": rows[both],
         "06:00 UTC run of the same day": with_single[both],
     }
-    result = {}
+    result, errors = {}, {}
     for name, part in variants.items():
         test_days = part.index[part.index >= baselines.TEST_START]
         # Each variant chooses its own setting on its validation days, as in train.py.
         alpha = train.choose_alpha(part, train.FEATURES_FULL)[0]
         forecast = train.walk_forward(part, train.FEATURES_FULL, alpha, test_days)
         result[name] = scores(part, forecast) | {"alpha": alpha, "test days": len(forecast)}
-    return pd.DataFrame(result).T
+        errors[name] = (forecast - part.loc[forecast.index, features.LABEL]).abs()
+    # Is the fresher forecast clearly better? 0.438 against 0.440 degC alone does not
+    # say it; the interval of the difference does (found in a review on 15.11.2026).
+    # Both variants have the same rows, so they forecast the same days.
+    old, fresh = variants  # the two names, in the order of the dict above
+    part = rows.loc[errors[old].index]
+    differences = {
+        window: difference(errors[fresh], errors[old], in_window) for window, in_window in windows_of(part).items()
+    }
+    return pd.DataFrame(result).T, pd.DataFrame(differences).T
 
 
 def main() -> None:
@@ -150,13 +223,18 @@ def main() -> None:
 
     print("\n1 Ladder: is the model worth its training?")
     print(ladder(rows, test_days, alphas).round(3).to_string())
+    print("\n  Differences between rungs (a - b, below 0: a is better) with 95 % intervals")
+    print(intervals(rows, test_days, alphas).round(3).to_string())
     print("\n2 Data: the full model trained on less data")
     print(learning_curve(rows, test_days, alphas["full"]).round(3).to_string())
     print("\n3 Retrain: the full model retrained less often")
     print(retrain_replay(rows, test_days, alphas["full"]).round(3).to_string())
     print("\n4 Forecast: the 48-hour-old forecast against the 06:00 UTC run of the same day")
     single = features.single_run_weather_features(features.load_single_runs(args.raw))
-    print(forecast_comparison(rows, single).round(3).to_string())
+    comparison, differences = forecast_comparison(rows, single)
+    print(comparison.round(3).to_string())
+    print("\n  06:00 UTC run - 48-hour-old forecast (below 0: the fresher one is better) with 95 % intervals")
+    print(differences.round(3).to_string())
 
 
 # Runs main() only when the file is started as a script, not when it is imported
