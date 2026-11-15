@@ -156,10 +156,11 @@ def choose_alpha(rows: pd.DataFrame, columns: list[str]) -> tuple[float, dict]:
 
 
 def evaluate(rows: pd.DataFrame, forecast: pd.Series) -> pd.DataFrame:
-    """The model against persistence on the test days, in the windows of the success criterion."""
+    """The model against the two baselines on the test days, in the windows of the success criterion."""
     part = rows.loc[forecast.index]
     error_model = (forecast - part[features.LABEL]).abs()
     error_persistence = (baselines.persistence(part) - part[features.LABEL]).abs()
+    error_trend = (baselines.trend_adjusted(part) - part[features.LABEL]).abs()
     # October to January by the day that is forecast (tomorrow), as in baselines.py.
     forecast_month = (part.index + pd.Timedelta(days=1)).month
     windows = {
@@ -173,11 +174,19 @@ def evaluate(rows: pd.DataFrame, forecast: pd.Series) -> pd.DataFrame:
         if row["days"] > 0:
             mae_model = error_model[in_window].mean()
             mae_persistence = error_persistence[in_window].mean()
+            mae_trend = error_trend[in_window].mean()
             row |= {
                 "model": mae_model,
                 "persistence": mae_persistence,
-                # The success criterion: 20 % below persistence on the same days.
-                "target": (1 - baselines.TARGET_GAIN) * mae_persistence,
+                "trend_adjusted": mae_trend,
+                # The success criterion of the README: 20 % below the STRONGER of the
+                # two baselines on the same days, the same rule as baselines.report().
+                # Before, this was always persistence (found in a review on 15.11.2026).
+                # Today persistence is the stronger one in every window, so the
+                # target does not change; it would if trend-adjusted got better.
+                "target": (1 - baselines.TARGET_GAIN) * min(mae_persistence, mae_trend),
+                # The gain and the interval below stay against plain persistence: the
+                # README and the gate (track.py) compare with it.
                 "gain_%": 100 * (1 - mae_model / mae_persistence),
             }
         if row["days"] >= baselines.MIN_DAYS_BOOTSTRAP:

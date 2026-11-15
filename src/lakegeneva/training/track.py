@@ -43,6 +43,7 @@ COLUMN_NAMES = {
     "days": "days",
     "model": "mae",
     "persistence": "mae_persistence",
+    "trend_adjusted": "mae_trend_adjusted",  # the second baseline: the target uses the stronger one
     "target": "target",
     "gain_%": "gain_pct",
     "diff": "diff",

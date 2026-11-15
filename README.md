@@ -73,7 +73,7 @@ Results on the 661 test days (21.01.2025–12.11.2026), every row on the same da
 | 3 Persistence plus the average change so far | 0.467 °C | 1.768 °C | none |
 | 4 Ridge, water features only | 0.438 °C | 1.618 °C | about 4 ms |
 | 5 Ridge, all features (the registered model) | 0.437 °C | 1.547 °C | about 4 ms |
-| Target: 20 % below row 1 | ≤ 0.421 °C | ≤ 1.544 °C | |
+| Target: 20 % below the stronger of rows 1 and 2 (row 1) | ≤ 0.421 °C | ≤ 1.544 °C | |
 
 What the numbers say:
 - **Clearly better than persistence, but both targets are missed so far.** The model is 17 % better on all test days (95 % interval of the difference: −0.121 to −0.059 °C) and 19.9 % better on the big-change days (−0.467 to −0.312 °C), where it misses the target by 0.003 °C.

@@ -190,7 +190,27 @@ def test_evaluate_compares_with_persistence_in_each_window():
     assert list(result.index) == ["test, all year", "test, change > 0.8", "test, Oct-Jan"]
     assert result.loc["test, all year", "model"] == 0
     assert result.loc["test, all year", "gain_%"] == pytest.approx(100)
-    # The target is 20 % below persistence on the same days.
+    # Here persistence is the stronger baseline, so the target is 20 % below it.
+    assert result.loc["test, all year", "persistence"] < result.loc["test, all year", "trend_adjusted"]
     assert result.loc["test, all year", "target"] == pytest.approx(0.8 * result.loc["test, all year", "persistence"])
     # February to March: no October-to-January day.
     assert result.loc["test, Oct-Jan", "days"] == 0
+
+
+def test_the_target_comes_from_the_stronger_baseline():
+    rows = fake_rows(60, start="2025-02-01")
+    # Here the 3-day trend knows tomorrow's change exactly, so trend-adjusted
+    # persistence is perfect: it is the stronger baseline, and 20 % below an error of 0
+    # is 0. Before the fix the target came from plain persistence (found in a review
+    # on 15.11.2026).
+    rows["water_trend_3d"] = 3 * (rows[features.LABEL] - rows["water_last"])
+    # The model forecast here is plain persistence itself.
+    forecast = rows["water_last"].rename("forecast")
+
+    result = train.evaluate(rows, forecast)
+
+    assert result.loc["test, all year", "trend_adjusted"] == pytest.approx(0)
+    assert result.loc["test, all year", "target"] == pytest.approx(0)
+    # The gain stays against plain persistence (the README and the gate use it): a
+    # forecast equal to persistence gains 0 %.
+    assert result.loc["test, all year", "gain_%"] == pytest.approx(0)
