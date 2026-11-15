@@ -16,7 +16,12 @@ on:
   schedule:
     # Cron format: minute hour day-of-month month day-of-week, always in UTC.
     # Every Monday at 06:00 UTC, after the feature pipeline of Sunday evening has stored
-    # Sunday's data. Why weekly: retraining every day and every week gave the same
+    # Sunday's data. Sunday is not over at that run, so the newest row with a label is
+    # Friday's: the model is 3 days (Monday) to 9 days (Sunday) behind the day it
+    # forecasts, one day more than the weekly replay in experiments.py assumes. Replayed
+    # with this real schedule, the error stays the same (0.436 / 1.544 degC, review of
+    # 15.11.2026). If GitHub starts Sunday's feature run very late (after about 01:30
+    # Swiss time), Saturday's row can be in too. Why weekly: retraining every day and every week gave the same
     # error on the test days (0.437 degC both, experiments.py, 14.11.2026), and never
     # retraining was worse on the big-change days (1.645 against 1.547 degC).
     - cron: "0 6 * * 1"

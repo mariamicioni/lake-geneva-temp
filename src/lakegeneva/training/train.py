@@ -202,8 +202,14 @@ def evaluate(rows: pd.DataFrame, forecast: pd.Series) -> pd.DataFrame:
 def train_final(rows: pd.DataFrame, columns: list[str], alpha: float):
     """The model for the live forecast: trained on every row with a known label."""
     # The feature table only has a label once tomorrow is over, so every row here is
-    # already known. On the evening of day D the newest row with a label is D-2, so
-    # this is exactly the model that the walk-forward test uses for day D.
+    # already known. Trained in the evening of day D, after the feature pipeline, the
+    # newest row with a label would be D-2: the model of the walk-forward test for D.
+    # But the weekly job (retrain.yml) runs on Monday at 06:00 UTC with the table of
+    # Sunday evening, when Sunday is not over yet. So its newest row with a label is
+    # FRIDAY's: the model learns up to D-3 for Monday's forecast and up to D-9 for
+    # Sunday's (found in a review on 15.11.2026; before, this comment said "exactly"
+    # D-2). This costs nothing: replayed with this real schedule, the test error is
+    # 0.436 / 1.544 degC against 0.437 / 1.547 degC with a new model every day.
     # Trained on the table (not plain arrays like in walk_forward()): the model then
     # keeps the column names, so the live forecast can check that it gets the right
     # columns in the right order. The numbers are the same either way.
