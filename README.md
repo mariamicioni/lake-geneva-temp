@@ -56,10 +56,11 @@ The rules that prevent leakage: every day is a Swiss calendar day (with summer t
 ## The training pipeline
 Every Monday (`.github/workflows/retrain.yml`, 06:00 UTC), or by hand:
 1. `dvc pull data/features.dvc` gets the newest feature table from the bucket. Training never reads the raw files.
-2. `train.py` chooses the one setting of the model on the validation year. Then it tests the model day by day: for each test day a new model is trained only on the earlier days whose label was known at 18:00 (walk-forward).
-3. The model for the live forecast is trained on all days with a known label.
-4. `track.py` logs the run to MLflow on DagsHub: the git commit, the data version, the settings, the test results and the model. The full model is registered as a new version of `lake-geneva-temp`.
-5. The alias `champion` (the model that the live forecast will load in MS4) moves to the new version only if it passes the gate: the whole 95 % interval of its difference to persistence is below 0.
+2. `check_fresh.py` stops the job if the newest row with all features is more than 2 days old, so an old table is never trained on or registered.
+3. `train.py` chooses the one setting of the model on the validation year. Then it tests the model day by day: for each test day a new model is trained only on the earlier days whose label was known at 18:00 (walk-forward).
+4. The model for the live forecast is trained on all days with a known label.
+5. `track.py` logs the run to MLflow on DagsHub: the git commit, the data version, the settings, the test results and the model. The full model is registered as a new version of `lake-geneva-temp`.
+6. The alias `champion` (the model that the live forecast will load in MS4) moves to the new version only if it passes the gate: the whole 95 % interval of its difference to persistence is below 0.
 
 The model is a Ridge regression [13]. It predicts tomorrow's change (tomorrow's mean minus the last reading before 18:00), and the forecast is the last reading plus that change.
 
@@ -175,7 +176,7 @@ I build this project on what the MLOps HS26 course teaches. When a file follows 
 |---|---|---|
 | `.github/workflows/ci.yml` | Block 1 exercise, Part D and the image job of its solution [5] | No training on the real data (the tests train on small fake tables); runs the unit tests, then builds the image without publishing it |
 | `.github/workflows/feature-pipeline.yml` | Block 1 exercise, Parts A (DVC) and D (CI with uv) [5] | Runs on a schedule; pulls and pushes the data with DVC and commits the pointer files |
-| `.github/workflows/retrain.yml` | Block 1 exercise, Parts A (DVC) and D (CI with uv) [5]; weekly policy from the SW09 retrain question [14] | Runs every Monday; pulls only the feature table, trains, logs to MLflow on DagsHub and registers the model; commits nothing |
+| `.github/workflows/retrain.yml` | Block 1 exercise, Parts A (DVC) and D (CI with uv) [5]; weekly policy from the SW09 retrain question [14] | Runs every Monday; pulls only the feature table, stops if it is old, trains, logs to MLflow on DagsHub and registers the model; commits nothing |
 | `pyproject.toml`, `uv.lock` | uv dependency management [4] | Own package layout under `src/lakegeneva/` |
 | `Dockerfile`, `.dockerignore` | Block 1 exercise, Part C (multi-stage image) [5]; `PYTHONUNBUFFERED=1` from the Block 3 exercise [12] | Python 3.12 like the rest of the project, base images and uv 0.13.0 pinned by digest, our package copied to `/app/src`; no model, no HEALTHCHECK/EXPOSE (the feature pipeline is a job, not a web service); the default command runs the downloads and the build, so it needs no key; the real data can be mounted at run time |
 | `src/lakegeneva/features/ingest_bafu.py` | BAFU Data Platform API documentation [1] | Written for this project |

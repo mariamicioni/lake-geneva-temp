@@ -5,8 +5,9 @@
 # The training pipeline, once a week on GitHub's machines: the "T" of the FTI
 # architecture retrains on its own, not by hand. One run:
 #   1. gets the newest feature table from the GCS bucket (dvc pull),
-#   2. trains the model and tests it day by day (src/lakegeneva/training/train.py),
-#   3. logs both models to MLflow on DagsHub and registers the full one; the alias
+#   2. stops if that table is old (the same freshness check as the feature pipeline),
+#   3. trains the model and tests it day by day (src/lakegeneva/training/train.py),
+#   4. logs both models to MLflow on DagsHub and registers the full one; the alias
 #      "champion" moves to it only if it passes the gate (src/lakegeneva/training/track.py).
 # Nothing is committed: the result lives in MLflow, not in Git.
 name: Retrain
@@ -66,7 +67,16 @@ jobs:
       - name: Get the newest feature table from the bucket
         run: dvc pull data/features.dvc
 
-      # 5. Train, test, log and register. The DagsHub token comes from the secret
+      # 5. Stop if the table is old (found in a review on 15.11.2026). Without this
+      #    step, after a week of red feature runs the job would train on the old table,
+      #    register a "new" version and move the alias to it. check_fresh.py is the same
+      #    check as at the end of the feature pipeline: the newest row with all features
+      #    may be at most 2 days old. On Monday morning it should be Sunday's row (1 day).
+      #    A red step stops the job, so nothing is logged or registered.
+      - name: Check that the feature table is fresh
+        run: uv run --locked python -m lakegeneva.features.check_fresh
+
+      # 6. Train, test, log and register. The DagsHub token comes from the secret
       #    MLFLOW_TRACKING_PASSWORD; GitHub hides it in the log. The address and the
       #    user name are not secret.
       - name: Train, test and register the model

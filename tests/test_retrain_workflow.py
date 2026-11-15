@@ -21,6 +21,17 @@ def test_retraining_reads_the_feature_store_and_runs_the_training_pipeline():
     assert "--no-mlflow" not in workflow
 
 
+def test_training_stops_if_the_feature_table_is_old():
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    # The freshness check runs after the table is pulled and before the training, so an
+    # old table is never trained on or registered (found in a review on 15.11.2026).
+    # .index() gives the position of the text in the file: the steps run top to bottom.
+    pull = workflow.index("dvc pull data/features.dvc")
+    check = workflow.index("python -m lakegeneva.features.check_fresh")
+    training = workflow.index("python src/lakegeneva/training/train.py")
+    assert pull < check < training
+
+
 def test_the_token_comes_only_from_the_secret():
     workflow = WORKFLOW.read_text(encoding="utf-8")
     # The token is handed over as an environment variable from GitHub's secrets, never
