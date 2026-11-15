@@ -131,6 +131,17 @@ def choose_alpha(rows: pd.DataFrame, columns: list[str]) -> tuple[float, dict]:
     # 14.11.2026; alpha stayed 1000 for both models). The test days never count either.
     validation_days = known_at_18(rows, baselines.TEST_START).index
     errors = {alpha: mae(rows, walk_forward(rows, columns, alpha, validation_days)) for alpha in ALPHAS}
+    # If no validation day has MIN_TRAIN_ROWS earlier rows, no day gets a forecast and
+    # every error is empty (NaN). min() below would then quietly return the first alpha
+    # of the list (0.1, the weakest penalty: 0.499 instead of 0.437 degC on the test
+    # days), and the run would be logged as if all was normal. So stop with a clear
+    # message instead (found in a review on 15.11.2026). This happens with a table
+    # that starts too late, e.g. the no-key path of the README with a later --start.
+    if all(pd.isna(error) for error in errors.values()):
+        raise ValueError(
+            f"alpha cannot be chosen: no validation day before {baselines.TEST_START:%d.%m.%Y} has "
+            f"{MIN_TRAIN_ROWS} earlier rows with all features and a label. Start the table earlier."
+        )
     # min(..., key=errors.get): the alpha whose error is the smallest.
     return min(errors, key=errors.get), errors
 

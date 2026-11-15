@@ -144,6 +144,17 @@ def test_the_setting_uses_only_labels_known_at_the_first_test_forecast(monkeypat
     assert train.choose_alpha(changed, features.FEATURES)[1] != errors
 
 
+def test_choosing_alpha_stops_when_no_validation_day_can_be_scored():
+    # A table that starts 11 days before TEST_START: no validation day has 90 earlier
+    # rows, so every validation error is empty. Before the fix, choose_alpha quietly
+    # returned the first alpha (0.1) (found in a review on 15.11.2026).
+    rows = fake_rows(80, start="2025-01-10")
+
+    # pytest.raises: the test passes only if this error comes, with this text in it.
+    with pytest.raises(ValueError, match="alpha cannot be chosen"):
+        train.choose_alpha(rows, features.FEATURES)
+
+
 def test_model_rows_need_all_features_and_a_label():
     rows = fake_rows(3)
     rows.iloc[0, rows.columns.get_loc("air_temp_fc_d1")] = np.nan  # a missing forecast
