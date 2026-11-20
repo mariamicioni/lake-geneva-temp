@@ -85,9 +85,22 @@ jobs:
       # 6. Train, test, log and register. The DagsHub token comes from the secret
       #    MLFLOW_TRACKING_PASSWORD; GitHub hides it in the log. The address and the
       #    user name are not secret.
+      #    Only a run of the main branch logs and registers: a run started by hand on
+      #    another branch would register a model trained with that branch's code, and
+      #    if it passed the gate it would become the champion (the same risk as in
+      #    feature-pipeline.yml, found in a review on 18.11.2026). The schedule always
+      #    runs on main.
       - name: Train, test and register the model
+        if: github.ref == 'refs/heads/main'
         env:
           MLFLOW_TRACKING_URI: https://dagshub.com/mariamicioni/lake-geneva-temp.mlflow
           MLFLOW_TRACKING_USERNAME: mariamicioni
           MLFLOW_TRACKING_PASSWORD: ${{ secrets.MLFLOW_TRACKING_PASSWORD }}
         run: uv run --locked python src/lakegeneva/training/train.py
+
+      # 7. On any other branch: the same training and test, but nothing is logged or
+      #    registered (--no-mlflow) and the token is not handed over. So a branch can
+      #    still be checked on GitHub's machines.
+      - name: Train and test only (not the main branch, nothing is registered)
+        if: github.ref != 'refs/heads/main'
+        run: uv run --locked python src/lakegeneva/training/train.py --no-mlflow

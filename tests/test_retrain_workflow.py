@@ -17,8 +17,31 @@ def test_retraining_reads_the_feature_store_and_runs_the_training_pipeline():
     # Only the feature table comes from the bucket, then the same script as on the laptop.
     assert "dvc pull data/features.dvc" in workflow
     assert "python src/lakegeneva/training/train.py" in workflow
-    # Not with --no-mlflow: the run must be logged and registered.
-    assert "--no-mlflow" not in workflow
+    # The step of the main branch is not --no-mlflow: that run must be logged and registered.
+    assert "--no-mlflow" not in step(workflow, "Train, test and register the model")
+
+
+def step(workflow: str, name: str) -> str:
+    """The lines of one step of the workflow, from its name up to the next step, without comments."""
+    text = workflow[workflow.index(f"- name: {name}") :]
+    end = text.find("- name:", 1)  # -1 if it is the last step
+    text = text if end == -1 else text[:end]
+    # Comment lines are left out: the comment ABOVE the next step would otherwise count
+    # as part of this step (it names --no-mlflow, for example).
+    return "\n".join(line for line in text.splitlines() if not line.strip().startswith("#"))
+
+
+def test_only_the_main_branch_logs_and_registers():
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    # A run on another branch must never register a model or move the alias (found in a
+    # review on 18.11.2026): the registering step runs only on main ...
+    register = step(workflow, "Train, test and register the model")
+    assert "if: github.ref == 'refs/heads/main'" in register
+    # ... and the step for every other branch trains with --no-mlflow and gets no token.
+    other = step(workflow, "Train and test only")
+    assert "if: github.ref != 'refs/heads/main'" in other
+    assert "train.py --no-mlflow" in other
+    assert "MLFLOW_TRACKING_PASSWORD" not in other
 
 
 def test_training_stops_if_the_feature_table_is_old():
