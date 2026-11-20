@@ -168,8 +168,27 @@ def choose_alpha(rows: pd.DataFrame, columns: list[str]) -> tuple[float, dict]:
     return min(errors, key=errors.get), errors
 
 
+def check_every_day_forecast(forecast: pd.Series, days) -> None:
+    """Stop with an error unless every day in `days` has a forecast that is a real number."""
+    # Why: the MAE is a mean, and pandas' mean() quietly skips a missing value (NaN).
+    # A day without a forecast would then simply not count. In a review on 18.11.2026,
+    # setting the 8 worst forecasts to NaN made the 20 % target flip from "missed" to
+    # "met", while the table still said 661 days. So the result is only computed if
+    # every expected day has a forecast.
+    days = pd.DatetimeIndex(days)
+    missing = days.difference(forecast.index)
+    not_a_number = forecast.index[~np.isfinite(forecast.to_numpy(dtype=float))]
+    if len(missing) or len(not_a_number):
+        raise ValueError(
+            f"{len(missing)} of {len(days)} days have no forecast and {len(not_a_number)} forecasts "
+            "are not a number: no MAE and no target are computed."
+        )
+
+
 def evaluate(rows: pd.DataFrame, forecast: pd.Series) -> pd.DataFrame:
     """The model against the two baselines on the test days, in the windows of the success criterion."""
+    # Every day of the forecast must be a real number (no NaN, no infinity).
+    check_every_day_forecast(forecast, forecast.index)
     part = rows.loc[forecast.index]
     error_model = (forecast - part[features.LABEL]).abs()
     error_persistence = (baselines.persistence(part) - part[features.LABEL]).abs()
@@ -240,6 +259,9 @@ def run(table: pd.DataFrame) -> dict:
     for name, columns in FEATURE_SETS.items():
         alpha, validation_errors = choose_alpha(rows, columns)
         forecast = walk_forward(rows, columns, alpha, test_days)
+        # Every test day must have a forecast: walk_forward skips a day when it has too
+        # few earlier rows, and such a day must not quietly drop out of the result.
+        check_every_day_forecast(forecast, test_days)
         results[name] = {
             "alpha": alpha,
             "validation_mae": validation_errors,

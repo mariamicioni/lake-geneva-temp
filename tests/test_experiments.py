@@ -1,5 +1,6 @@
 """Tests for the training experiments (ladder, data, retrain). Small fake tables, no internet."""
 # How to run: `uv run pytest` (locally) - CI runs the same on every push.
+import numpy as np  # np.nan: a forecast that is not a number
 import pandas as pd
 import pytest
 
@@ -99,6 +100,28 @@ def test_intervals_compare_the_rungs_of_the_ladder(small):
     oct_jan = result.loc[("5 all features - 4 water only", "Oct-Jan")]
     assert oct_jan["days"] == 10
     assert pd.isna(oct_jan["ci_low"])
+
+
+def test_a_missing_forecast_stops_the_experiments(small, monkeypatch):
+    rows, test_days = small
+    # The walk-forward test gives one forecast that is not a number (NaN).
+    real_walk_forward = train.walk_forward
+
+    def one_forecast_missing(*args, **kwargs):
+        forecast = real_walk_forward(*args, **kwargs)
+        forecast.iloc[5] = np.nan
+        return forecast
+
+    monkeypatch.setattr(train, "walk_forward", one_forecast_missing)
+
+    # Before, mean() skipped that day and the README tables would have been computed on
+    # fewer days without a word (review of 20.11.2026). Now every table stops.
+    with pytest.raises(ValueError, match="not a number"):
+        experiments.ladder(rows, test_days, {"full": 0.1, "water_only": 0.1})
+    with pytest.raises(ValueError, match="not a number"):
+        experiments.intervals(rows, test_days, {"full": 0.1, "water_only": 0.1})
+    with pytest.raises(ValueError, match="not a number"):
+        experiments.retrain_replay(rows, test_days, 0.1)
 
 
 def test_learning_curve_and_retrain_cover_every_setting(small):

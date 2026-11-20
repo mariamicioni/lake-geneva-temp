@@ -197,6 +197,29 @@ def test_evaluate_compares_with_persistence_in_each_window():
     assert result.loc["test, Oct-Jan", "days"] == 0
 
 
+def test_a_forecast_with_missing_values_gives_no_result():
+    rows = fake_rows(60, start="2025-02-01")
+    # Plain persistence as the "model", then its 8 worst days set to NaN (not a number).
+    forecast = rows["water_last"].rename("forecast")
+    worst = (forecast - rows[features.LABEL]).abs().nlargest(8).index
+    forecast[worst] = np.nan
+
+    # Before, mean() skipped the 8 days, the MAE got better and the table still said 60
+    # days (review of 18.11.2026). Now there is no MAE and no target at all.
+    with pytest.raises(ValueError, match="not a number"):
+        train.evaluate(rows, forecast)
+
+
+def test_every_expected_day_needs_a_forecast():
+    days = pd.date_range("2025-02-01", periods=5, freq="D")
+    forecast = pd.Series(1.0, index=days[:4])  # the last day has no forecast
+
+    with pytest.raises(ValueError, match="1 of 5 days have no forecast"):
+        train.check_every_day_forecast(forecast, days)
+    # All five days with a number: no error.
+    train.check_every_day_forecast(pd.Series(1.0, index=days), days)
+
+
 def test_the_target_comes_from_the_stronger_baseline():
     rows = fake_rows(60, start="2025-02-01")
     # Here the 3-day trend knows tomorrow's change exactly, so trend-adjusted

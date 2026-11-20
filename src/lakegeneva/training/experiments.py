@@ -40,8 +40,12 @@ RETRAIN = {"every day": 1, "every week": 7, "every month": 30, "only once": 100_
 TIMING_REPEATS = 5
 
 
-def scores(rows: pd.DataFrame, forecast: pd.Series) -> dict:
-    """MAE on all test days and on the big-change days (°C)."""
+def scores(rows: pd.DataFrame, forecast: pd.Series, days) -> dict:
+    """MAE on all test days and on the big-change days (°C). Every day in `days` needs a forecast."""
+    # The same rule as train.evaluate(): a missing forecast (NaN, or a day that is not
+    # there) must stop the experiment instead of quietly dropping out of the mean. This
+    # script makes the tables of the README (found in a review on 20.11.2026).
+    train.check_every_day_forecast(forecast, days)
     big = baselines.big_change_days(rows.loc[forecast.index])
     return {
         "test MAE": train.mae(rows, forecast),
@@ -104,16 +108,16 @@ def ladder(rows: pd.DataFrame, test_days, alphas: dict) -> pd.DataFrame:
     part = rows.loc[test_days]
     result = {
         # The first three rungs cost nothing: no training at all.
-        "1 persistence": scores(rows, baselines.persistence(part)) | {"one fit (ms)": 0.0},
-        "2 trend-adjusted persistence": scores(rows, baselines.trend_adjusted(part)) | {"one fit (ms)": 0.0},
-        "3 persistence + average change": scores(rows, average_change(rows, test_days)) | {"one fit (ms)": 0.0},
+        "1 persistence": scores(rows, baselines.persistence(part), test_days) | {"one fit (ms)": 0.0},
+        "2 trend-adjusted persistence": scores(rows, baselines.trend_adjusted(part), test_days) | {"one fit (ms)": 0.0},
+        "3 persistence + average change": scores(rows, average_change(rows, test_days), test_days) | {"one fit (ms)": 0.0},
     }
     for rung, name in (("4 Ridge, water only", "water_only"), ("5 Ridge, all features", "full")):
         columns = train.FEATURE_SETS[name]
         start = time.perf_counter()
         forecast = train.walk_forward(rows, columns, alphas[name], test_days)
         seconds = time.perf_counter() - start
-        result[rung] = scores(rows, forecast) | {
+        result[rung] = scores(rows, forecast, test_days) | {
             "one fit (ms)": 1000 * fit_seconds(rows, columns, alphas[name]),
             # One model per test day: the whole walk-forward test.
             "walk-forward (s)": seconds,
@@ -134,6 +138,10 @@ def intervals(rows: pd.DataFrame, test_days, alphas: dict) -> pd.DataFrame:
         "4 water only": train.walk_forward(rows, train.FEATURE_SETS["water_only"], alphas["water_only"], test_days),
         "5 all features": train.walk_forward(rows, train.FEATURES_FULL, alphas["full"], test_days),
     }
+    # Every rung needs a real forecast on every test day, as in scores() (a NaN would
+    # quietly drop out of the means and the intervals).
+    for forecast in forecasts.values():
+        train.check_every_day_forecast(forecast, test_days)
     # The error of each rung on each test day (°C, without sign). reindex: the same
     # days in the same order for every rung, so the yes/no lists of the windows fit.
     errors = {name: (f.reindex(part.index) - part[features.LABEL]).abs() for name, f in forecasts.items()}
@@ -157,7 +165,7 @@ def learning_curve(rows: pd.DataFrame, test_days, alpha: float) -> pd.DataFrame:
     result = {}
     for name, window in WINDOWS.items():
         forecast = train.walk_forward(rows, train.FEATURES_FULL, alpha, test_days, window_days=window)
-        result[name] = scores(rows, forecast) | {"days with a forecast": len(forecast)}
+        result[name] = scores(rows, forecast, test_days) | {"days with a forecast": len(forecast)}
     return pd.DataFrame(result).T
 
 
@@ -166,7 +174,7 @@ def retrain_replay(rows: pd.DataFrame, test_days, alpha: float) -> pd.DataFrame:
     result = {}
     for name, every in RETRAIN.items():
         forecast = train.walk_forward(rows, train.FEATURES_FULL, alpha, test_days, retrain_every=every)
-        result[name] = scores(rows, forecast)
+        result[name] = scores(rows, forecast, test_days)
     return pd.DataFrame(result).T
 
 
@@ -191,7 +199,7 @@ def forecast_comparison(rows: pd.DataFrame, single: pd.DataFrame) -> tuple[pd.Da
         # Each variant chooses its own setting on its validation days, as in train.py.
         alpha = train.choose_alpha(part, train.FEATURES_FULL)[0]
         forecast = train.walk_forward(part, train.FEATURES_FULL, alpha, test_days)
-        result[name] = scores(part, forecast) | {"alpha": alpha, "test days": len(forecast)}
+        result[name] = scores(part, forecast, test_days) | {"alpha": alpha, "test days": len(forecast)}
         errors[name] = (forecast - part.loc[forecast.index, features.LABEL]).abs()
     # Is the fresher forecast clearly better? 0.438 against 0.440 degC alone does not
     # say it; the interval of the difference does (found in a review on 15.11.2026).
