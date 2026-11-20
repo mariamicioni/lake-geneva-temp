@@ -67,7 +67,7 @@ Every Monday (`.github/workflows/retrain.yml`, 06:00 UTC), or by hand:
    - **G4:** on the same days, its predicted change is never bigger than 5.30 °C, the largest change before the test period.
    - **G5:** the newest features are at most 2 days old and the newest label at most 5 days old (normal on Monday morning: 3 days), also when `train.py` is started by hand without the workflow.
 
-   If a check cannot be done (MLflow does not answer, a number is missing), the answer is no. If a person moves the alias while the gate runs, the new version is not promoted, so a retrain never undoes a rollback. A version that is not promoted stays registered with one tag per check, and the run turns red so that a person looks at it; if it is fine, `track.py --promote <version>` moves the alias by hand. The gate guards against breakage (a bug, changed old data, a broken feature, a wrong model). It does not prove that a new version is better on new days: that is the job of the monitoring in MS4. G1 and G2 measure the training procedure on the validation days, where alpha was also chosen, so they find regressions but are no independent proof of quality. On the validation days alone the model is not clearly better than persistence (95 % interval −0.062 to +0.002 °C on 274 days).
+   If a check cannot be done (MLflow does not answer, a number is missing), the answer is no. A version that is not promoted stays registered with one tag per check, and the run turns red so that a person looks at it; if it is fine, the workflow **Promote by hand** (`.github/workflows/promote.yml`, Actions tab, type the version) moves the alias. It shares the concurrency group of `retrain.yml`, so GitHub runs the two one after the other: a promotion or rollback started while a retrain runs waits, and the retrain can never overwrite it. (The gate also reads the alias again right before it moves it.) The gate guards against breakage (a bug, changed old data, a broken feature, a wrong model). It does not prove that a new version is better on new days: that is the job of the monitoring in MS4. G1 and G2 measure the training procedure on the validation days, where alpha was also chosen, so they find regressions but are no independent proof of quality. On the validation days alone the model is not clearly better than persistence (95 % interval −0.062 to +0.002 °C on 274 days).
 
 The model is a Ridge regression [13]. It predicts tomorrow's change (tomorrow's mean minus the last reading before 18:00), and the forecast is the last reading plus that change. This last step is one shared function in `src/lakegeneva/common/forecasting.py`: the walk-forward test uses it, and the live forecast (MS4) will use it on the champion, so the tested forecast and the live forecast are the same code (no training-serving skew). The registered model itself returns the change; its MLflow signature names the output `change_degC`.
 
@@ -137,7 +137,7 @@ uv run python src/lakegeneva/training/train.py               # the same, logged 
 uv run mlflow ui                                             # the local runs and models, at http://localhost:5000
 uv run python src/lakegeneva/training/experiments.py         # the table of results above and the three experiments (about 2 minutes)
 uv run --env-file .env python src/lakegeneva/training/train.py   # only with a DagsHub token in .env: log to DagsHub and register
-uv run --env-file .env python src/lakegeneva/training/track.py --promote 4   # after a check by a person: move the alias champion to version 4
+uv run --env-file .env python src/lakegeneva/training/track.py --promote 4   # the same as the workflow "Promote by hand", from the laptop: only when no Retrain run is in progress
 ```
 The forecast comparison at the end of `experiments.py` also needs the 06:00 UTC runs: `uv run python src/lakegeneva/features/ingest_weather_single.py --start 2024-08-10` (about 5 minutes). Checked on 14.11.2026 in a fresh clone without a key: the rebuilt table gives 0.437 °C on all test days and 1.546 °C on the big-change days (the stored table: 0.437 and 1.547 °C).
 
@@ -170,7 +170,7 @@ src/lakegeneva/
   common/      shared code: feature definition, baselines, forecast from the model's change, names of the raw files, weather location
 tests/         unit tests (run in CI); fixtures/ holds the small test sample
 data/          raw/ and features/ (not in Git: DVC pointer files raw.dvc, features.dvc)
-.github/workflows/  ci.yml (tests + image), feature-pipeline.yml (daily), retrain.yml (weekly)
+.github/workflows/  ci.yml (tests + image), feature-pipeline.yml (daily), retrain.yml (weekly), promote.yml (by hand)
 notebooks/     exploration only
 docs/          proposal and milestone summaries
 Dockerfile     image of the feature pipeline
@@ -185,6 +185,7 @@ I build this project on what the MLOps HS26 course teaches. When a file follows 
 | `.github/workflows/ci.yml` | Block 1 exercise, Part D and the image job of its solution [5] | No training on the real data (the tests train on small fake tables); runs the unit tests, then builds the image without publishing it |
 | `.github/workflows/feature-pipeline.yml` | Block 1 exercise, Parts A (DVC) and D (CI with uv) [5] | Runs on a schedule; pulls and pushes the data with DVC and commits the pointer files |
 | `.github/workflows/retrain.yml` | Block 1 exercise, Parts A (DVC) and D (CI with uv) [5]; weekly policy from the SW09 retrain question [14] | Runs every Monday; pulls only the feature table, stops if it is old, trains, logs to MLflow on DagsHub and registers the model (a run on another branch only trains and tests); commits nothing |
+| `.github/workflows/promote.yml` | The same setup as `retrain.yml` [5]; a review of this repository (20.11.2026) found that a retrain could overwrite a rollback made while it ran | Written for this project: one concurrency group with `retrain.yml`, the version passed as an environment variable |
 | `pyproject.toml`, `uv.lock` | uv dependency management [4] | Own package layout under `src/lakegeneva/` |
 | `Dockerfile`, `.dockerignore` | Block 1 exercise, Part C (multi-stage image) [5]; `PYTHONUNBUFFERED=1` from the Block 3 exercise [12] | Python 3.12 like the rest of the project, base images and uv 0.13.0 pinned by digest, our package copied to `/app/src`; no model, no HEALTHCHECK/EXPOSE (the feature pipeline is a job, not a web service); the default command runs the downloads and the build, so it needs no key; the real data can be mounted at run time |
 | `src/lakegeneva/features/ingest_bafu.py` | BAFU Data Platform API documentation [1] | Written for this project |

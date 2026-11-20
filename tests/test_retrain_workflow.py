@@ -3,6 +3,7 @@
 from pathlib import Path
 
 WORKFLOW = Path(__file__).parent.parent / ".github" / "workflows" / "retrain.yml"
+PROMOTE = Path(__file__).parent.parent / ".github" / "workflows" / "promote.yml"
 
 
 def test_retraining_is_scheduled_weekly_and_can_be_started_by_hand():
@@ -63,3 +64,23 @@ def test_the_token_comes_only_from_the_secret():
     assert workflow.count("MLFLOW_TRACKING_PASSWORD:") == 1
     # The job only reads the repository: retraining never commits anything.
     assert "contents: read" in workflow
+
+
+def test_a_promotion_by_hand_waits_for_a_running_retrain():
+    retrain = WORKFLOW.read_text(encoding="utf-8")
+    promote = PROMOTE.read_text(encoding="utf-8")
+    # Both workflows use the same concurrency group, so GitHub runs them one after the
+    # other: a retrain can never overwrite a promotion made while it runs (found in a
+    # review on 20.11.2026).
+    assert 'group: retrain' in retrain and 'group: retrain' in promote
+    # Started by hand only, with the version as an input; only from the main branch.
+    assert "workflow_dispatch:" in promote and "schedule:" not in promote
+    assert "if: github.ref == 'refs/heads/main'" in promote
+    # The typed version reaches the command through an environment variable, never
+    # written into the command itself (no script injection) ...
+    run = step(promote, "Move the alias champion to the version")
+    assert "VERSION: ${{ inputs.version }}" in run
+    assert 'track.py --promote "$VERSION"' in run
+    assert "${{ inputs.version }}" not in next(line for line in run.splitlines() if "run:" in line)
+    # ... and the token comes only from the secret.
+    assert "MLFLOW_TRACKING_PASSWORD: ${{ secrets.MLFLOW_TRACKING_PASSWORD }}" in promote

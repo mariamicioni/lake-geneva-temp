@@ -1,0 +1,63 @@
+# Written for this project, with the same setup as retrain.yml (Block 1 exercise, Part D
+# (CI with uv), F. Bär [5] in README.md).
+#
+# Promote a model version by hand: move the alias "champion" to a version that a person
+# checked in MLflow. This is needed when the gate could not decide (for example the
+# first run after the gate was added) or for a rollback to an older version.
+# Start it in the Actions tab: "Promote by hand" -> "Run workflow" -> type the version.
+#
+# Why a workflow and not only the command on the laptop: it shares the concurrency group
+# "retrain" with retrain.yml. GitHub never runs two jobs of one group at the same time,
+# so a promotion started while a retrain runs WAITS until the retrain is done. Then the
+# retrain cannot overwrite the promotion between its last check of the champion and its
+# alias write, a gap the code alone cannot close (found in a review on 20.11.2026).
+name: Promote by hand
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "The model version to make the champion (check it in MLflow first)"
+        required: true
+        type: string
+
+# The SAME group as retrain.yml: promotions and retrains run one after the other.
+# Note: while one run of the group is in progress, GitHub keeps only ONE waiting run.
+# If a second run is started in that time, the first waiting one is cancelled: then
+# start the promotion again after the retrain.
+concurrency:
+  group: retrain
+  cancel-in-progress: false
+
+# The job only reads the repository; it writes to DagsHub, not to Git.
+permissions:
+  contents: read
+
+jobs:
+  promote:
+    # Only from the main branch, like the training (retrain.yml step 6).
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest  # a fresh Linux machine from GitHub, deleted after the run
+    timeout-minutes: 10
+    steps:
+      # 1. The code (track.py) and uv.lock.
+      - uses: actions/checkout@v7
+
+      # 2. The exact package versions from uv.lock, WITH the dev group (MLflow is there).
+      - uses: astral-sh/setup-uv@v10.2.0
+        with:
+          enable-cache: true
+      - name: Install the exact versions from uv.lock (with MLflow)
+        run: uv sync --locked
+
+      # 3. Move the alias. The version comes in as an environment variable, not written
+      #    into the command itself: text typed into the form must never become part of
+      #    a shell command (GitHub's advice against script injection). The token comes
+      #    from the secret MLFLOW_TRACKING_PASSWORD, as in retrain.yml.
+      - name: Move the alias champion to the version
+        env:
+          MLFLOW_TRACKING_URI: https://dagshub.com/mariamicioni/lake-geneva-temp.mlflow
+          MLFLOW_TRACKING_USERNAME: mariamicioni
+          MLFLOW_TRACKING_PASSWORD: ${{ secrets.MLFLOW_TRACKING_PASSWORD }}
+          VERSION: ${{ inputs.version }}
+        run: uv run --locked python src/lakegeneva/training/track.py --promote "$VERSION"

@@ -336,6 +336,10 @@ def promote_by_hand(version: str) -> None:
     # new version is not promoted. A person looks at the tags and the numbers of the
     # version in MLflow and, if it is fine, promotes it with this command. The tag
     # says that a person decided, not the gate.
+    # Normally it runs in the workflow promote.yml, which waits while a retrain runs
+    # (same concurrency group): started from a laptop during a retrain, the retrain
+    # could overwrite it between its last check and its alias write (review of
+    # 20.11.2026). So from a laptop only when no Retrain run is in progress.
     import mlflow
 
     client = mlflow.MlflowClient()
