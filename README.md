@@ -60,7 +60,14 @@ Every Monday (`.github/workflows/retrain.yml`, 06:00 UTC), or by hand:
 3. `train.py` chooses the one setting of the model on the validation year. Then it tests the model day by day: for each test day a new model is trained only on the earlier days whose label was known at 18:00 (walk-forward).
 4. The model for the live forecast is trained on all days with a known label.
 5. `track.py` logs the run to MLflow on DagsHub: the git commit, the data version, the settings, the test results and the model. The full model is registered as a new version of `lake-geneva-temp`.
-6. The alias `champion` (the model that the live forecast will load in MS4) moves to the new version only if it passes the gate: the whole 95 % interval of its difference to persistence is below 0.
+6. The alias `champion` (the model that the live forecast will load in MS4) moves to the new version only if it passes the gate (`gate.py`). The gate reads no label of a test day: the test days are only for reporting. It checks the version as it was loaded back from MLflow, in five steps:
+   - **G1:** on the validation days, the training procedure has a lower MAE than persistence and than row 3 of the table below.
+   - **G2:** its validation MAE is at most 0.005 °C above the champion's, on exactly the same validation days and labels (an md5 fingerprint of them is logged with every run).
+   - **G3:** on the newest 7 days with all features (no label needed), its forecasts are at most 0.3 °C from the champion's. A normal weekly retrain moves them by about 0.015 °C.
+   - **G4:** on the same days, its predicted change is never bigger than 5.30 °C, the largest change before the test period.
+   - **G5:** the newest features are at most 2 days old and the newest label at most 5 days old (normal on Monday morning: 3 days), also when `train.py` is started by hand without the workflow.
+
+   If a check cannot be done (MLflow does not answer, a number is missing), the answer is no. If a person moves the alias while the gate runs, the new version is not promoted, so a retrain never undoes a rollback. A version that is not promoted stays registered with one tag per check, and the run turns red so that a person looks at it; if it is fine, `track.py --promote <version>` moves the alias by hand. The gate guards against breakage (a bug, changed old data, a broken feature, a wrong model). It does not prove that a new version is better on new days: that is the job of the monitoring in MS4. G1 and G2 measure the training procedure on the validation days, where alpha was also chosen, so they find regressions but are no independent proof of quality. On the validation days alone the model is not clearly better than persistence (95 % interval −0.062 to +0.002 °C on 274 days).
 
 The model is a Ridge regression [13]. It predicts tomorrow's change (tomorrow's mean minus the last reading before 18:00), and the forecast is the last reading plus that change. This last step is one shared function in `src/lakegeneva/common/forecasting.py`: the walk-forward test uses it, and the live forecast (MS4) will use it on the champion, so the tested forecast and the live forecast are the same code (no training-serving skew). The registered model itself returns the change; its MLflow signature names the output `change_degC`.
 
@@ -83,7 +90,7 @@ What the numbers say:
 - **Retraining every week is enough.** A new model every day, every week or every month gives 0.437 °C. A model trained only once is worse on the big-change days (1.645 °C).
 - **The fresher forecast is not better.** With the 06:00 UTC run of the same day instead of the 48-hour-old forecast, the error is 0.438 against 0.440 °C on the 655 test days on which both exist. So the features stay as they are.
 
-Where to look: the runs and the registered model are public in the [MLflow pages on DagsHub](https://dagshub.com/mariamicioni/lake-geneva-temp.mlflow/) (no login needed). Every run names its git commit and its data version. With these two, `train.py` gives the same numbers again: checked on 14.11.2026 in a fresh clone for a run made on GitHub, where all 33 logged numbers were equal to 13 decimal places. The version tag `target_20_percent` says whether both targets are met; `champion` only means that the gate was passed. One training run on GitHub takes about 1.5 minutes.
+Where to look: the runs and the registered model are public in the [MLflow pages on DagsHub](https://dagshub.com/mariamicioni/lake-geneva-temp.mlflow/) (no login needed). Every run names its git commit and its data version. With these two, `train.py` gives the same numbers again: checked on 14.11.2026 in a fresh clone for a run made on GitHub, where all 33 logged numbers were equal to 13 decimal places. The version tag `target_20_percent` says whether both targets are met; `champion` only means that the gate was passed (or, tag `gate`: "promoted by hand", that a person checked it). One training run on GitHub takes about 1.5 minutes.
 
 ## Where the data lives
 Data and models are never stored in Git; Git only holds code, configuration and small DVC pointer files. The only exception is a 4-day test sample of real BAFU readings in `tests/fixtures/` (22 KB), so that CI can test the feature code without the data.
@@ -130,6 +137,7 @@ uv run python src/lakegeneva/training/train.py               # the same, logged 
 uv run mlflow ui                                             # the local runs and models, at http://localhost:5000
 uv run python src/lakegeneva/training/experiments.py         # the table of results above and the three experiments (about 2 minutes)
 uv run --env-file .env python src/lakegeneva/training/train.py   # only with a DagsHub token in .env: log to DagsHub and register
+uv run --env-file .env python src/lakegeneva/training/track.py --promote 4   # after a check by a person: move the alias champion to version 4
 ```
 The forecast comparison at the end of `experiments.py` also needs the 06:00 UTC runs: `uv run python src/lakegeneva/features/ingest_weather_single.py --start 2024-08-10` (about 5 minutes). Checked on 14.11.2026 in a fresh clone without a key: the rebuilt table gives 0.437 °C on all test days and 1.546 °C on the big-change days (the stored table: 0.437 and 1.547 °C).
 
@@ -157,7 +165,7 @@ On Linux the user in the container must be allowed to write to `out/`: run `mkdi
 ```
 src/lakegeneva/
   features/    feature pipeline (ingest, backfill, build the table)
-  training/    training pipeline (read the feature table, train, test walk-forward, log and register with MLflow)
+  training/    training pipeline (read the feature table, train, test walk-forward, log and register with MLflow, promotion gate)
   inference/   inference pipeline, empty until MS4 (load model, predict, serve)
   common/      shared code: feature definition, baselines, forecast from the model's change, names of the raw files, weather location
 tests/         unit tests (run in CI); fixtures/ holds the small test sample
@@ -195,7 +203,8 @@ I build this project on what the MLOps HS26 course teaches. When a file follows 
 | `src/lakegeneva/common/forecasting.py` | A review of this repository found that "last reading + change" existed only inside the walk-forward test, so the live forecast would have had to repeat it by hand (training-serving skew) | Written for this project |
 | `src/lakegeneva/training/train.py` | Ridge regression and scaling from the scikit-learn documentation [13]; walk-forward test as planned in the MS2 summary (review points A1, B2) | Written for this project |
 | `src/lakegeneva/training/experiments.py` | SW09 lecture, "Your pipeline": baseline ladder, how much data, how often to retrain [14] | Own experiments on this project's data; the lecture's scripts are not used |
-| `src/lakegeneva/training/track.py` | Block 1 exercise solution, `train.py`: log the parameters, the git commit, the metrics and the model; register it; alias `champion` [5] | The DVC data version is logged too; the evaluation tables are saved with each run; the signature names the output (a change); a gate decides about the alias |
+| `src/lakegeneva/training/track.py` | Block 1 exercise solution, `train.py`: log the parameters, the git commit, the metrics and the model; register it; alias `champion` [5] | The DVC data version is logged too; the evaluation tables are saved with each run; the signature names the output (a change); the gate (`gate.py`) decides about the alias, and a person can promote by hand |
+| `src/lakegeneva/training/gate.py` | Review point B3 (15.11.2026) and a second review of the design (17.11.2026): no decision from the test days, fail-closed | Written for this project |
 | `DATACARD.md` | Block 1 lecture: document column names, dtypes and missing-value handling in a DATACARD.md [4] | Written for this project |
 
 **AI use:** Anthropic Claude helped me write and test the code and the documentation. 

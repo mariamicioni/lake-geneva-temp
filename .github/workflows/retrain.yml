@@ -8,7 +8,8 @@
 #   2. stops if that table is old (the same freshness check as the feature pipeline),
 #   3. trains the model and tests it day by day (src/lakegeneva/training/train.py),
 #   4. logs both models to MLflow on DagsHub and registers the full one; the alias
-#      "champion" moves to it only if it passes the gate (src/lakegeneva/training/track.py).
+#      "champion" moves to it only if it passes the gate (src/lakegeneva/training/gate.py).
+#      A version that does not pass turns the run red, so GitHub sends an email.
 # Nothing is committed: the result lives in MLflow, not in Git.
 name: Retrain
 
