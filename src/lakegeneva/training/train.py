@@ -2,8 +2,9 @@
 
 The model is a Ridge regression. It predicts tomorrow's CHANGE (tomorrow's mean
 minus the last reading before 18:00), and the forecast is the last reading plus
-that change. It is tested on the test days from 21.01.2025 the way it will be used
-live: for every test day it is trained again on the earlier days only (walk-forward).
+that change (common/forecasting.py, shared with the live forecast). It is tested on
+the test days from 21.01.2025 the way it will be used live: for every test day it is
+trained again on the earlier days only (walk-forward).
 
     python src/lakegeneva/training/train.py
 """
@@ -27,7 +28,9 @@ from sklearn.linear_model import Ridge  # linear regression with a penalty
 from sklearn.pipeline import make_pipeline  # scaling and regression as one model
 from sklearn.preprocessing import StandardScaler  # every feature to mean 0, spread 1
 
-from lakegeneva.common import baselines, features  # the shared definitions
+# The shared definitions: the baselines, the features, and the step from the model's
+# answer (a change) to the forecast (a temperature).
+from lakegeneva.common import baselines, features, forecasting
 
 # --- Settings -----------------------------------------------------------------
 # The two models: all ten features, and only the five water features (review point
@@ -69,6 +72,8 @@ def make_model(alpha: float):
 
 def change(rows: pd.DataFrame) -> pd.Series:
     """What the model learns: tomorrow's mean minus the last reading before 18:00."""
+    # The way back, from a predicted change to a temperature, is
+    # forecasting.temperature(): the last reading plus the change.
     return rows[features.LABEL] - rows["water_last"]
 
 
@@ -121,8 +126,16 @@ def walk_forward(
         # A kept model was trained on day trained_on with the rows up to trained_on - 2,
         # which are also known on every later day, so keeping it never leaks.
         i = rows.index.get_loc(day)  # the position of the day to forecast
-        # x[i : i + 1] keeps a table with one row, which predict() needs.
-        forecasts[day] = last[i] + model.predict(x[i : i + 1])[0]
+        # The forecast is the last reading plus the predicted change. This step is not
+        # written here: it is forecasting.temperature(), the same function that the
+        # live forecast (MS4) will use on the registered model. So the forecast that
+        # is tested here and the live forecast cannot differ in this step
+        # (training-serving skew). Before, the step was a line of its own here:
+        # last[i] + model.predict(x[i : i + 1])[0], and the numbers are the same
+        # (checked on 15.11.2026: every forecast on the validation days is equal, bit by bit).
+        # x[i : i + 1] and last[i : i + 1] keep one row, which predict() needs; the
+        # result is a list with one forecast, and [0] takes it out.
+        forecasts[day] = forecasting.temperature(model, x[i : i + 1], last[i : i + 1])[0]
     return pd.Series(forecasts, name="forecast", dtype=float).rename_axis("date")
 
 
@@ -211,8 +224,11 @@ def train_final(rows: pd.DataFrame, columns: list[str], alpha: float):
     # D-2). This costs nothing: replayed with this real schedule, the test error is
     # 0.436 / 1.544 degC against 0.437 / 1.547 degC with a new model every day.
     # Trained on the table (not plain arrays like in walk_forward()): the model then
-    # keeps the column names, so the live forecast can check that it gets the right
-    # columns in the right order. The numbers are the same either way.
+    # keeps the column names, and forecasting.temperature_for_rows() uses them to hand
+    # the model the right columns in the right order in the live forecast. The numbers
+    # are the same either way (tests/test_train.py compares the two).
+    # Like every model here, it returns the CHANGE. The live forecast must not use
+    # model.predict() as a temperature: it calls forecasting.temperature_for_rows().
     return make_model(alpha).fit(rows[columns], change(rows))
 
 

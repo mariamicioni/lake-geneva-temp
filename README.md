@@ -62,7 +62,7 @@ Every Monday (`.github/workflows/retrain.yml`, 06:00 UTC), or by hand:
 5. `track.py` logs the run to MLflow on DagsHub: the git commit, the data version, the settings, the test results and the model. The full model is registered as a new version of `lake-geneva-temp`.
 6. The alias `champion` (the model that the live forecast will load in MS4) moves to the new version only if it passes the gate: the whole 95 % interval of its difference to persistence is below 0.
 
-The model is a Ridge regression [13]. It predicts tomorrow's change (tomorrow's mean minus the last reading before 18:00), and the forecast is the last reading plus that change.
+The model is a Ridge regression [13]. It predicts tomorrow's change (tomorrow's mean minus the last reading before 18:00), and the forecast is the last reading plus that change. This last step is one shared function in `src/lakegeneva/common/forecasting.py`: the walk-forward test uses it, and the live forecast (MS4) will use it on the champion, so the tested forecast and the live forecast are the same code (no training-serving skew). The registered model itself returns the change; its MLflow signature names the output `change_degC`.
 
 Results on the 661 test days (21.01.2025–12.11.2026), every row on the same days (`experiments.py`, numbers of 14.11.2026):
 
@@ -159,7 +159,7 @@ src/lakegeneva/
   features/    feature pipeline (ingest, backfill, build the table)
   training/    training pipeline (read the feature table, train, test walk-forward, log and register with MLflow)
   inference/   inference pipeline, empty until MS4 (load model, predict, serve)
-  common/      shared code: feature definition, baselines, names of the raw files, weather location
+  common/      shared code: feature definition, baselines, forecast from the model's change, names of the raw files, weather location
 tests/         unit tests (run in CI); fixtures/ holds the small test sample
 data/          raw/ and features/ (not in Git: DVC pointer files raw.dvc, features.dvc)
 .github/workflows/  ci.yml (tests + image), feature-pipeline.yml (daily), retrain.yml (weekly)
@@ -192,9 +192,10 @@ I build this project on what the MLOps HS26 course teaches. When a file follows 
 | `src/lakegeneva/features/run_pipeline.py` | The steps of the daily job (`feature-pipeline.yml`); "no shell tricks" from the Block 3 exercise [12] | Written for this project |
 | `.dvc/config`, `data/raw.dvc`, `data/features.dvc` | Block 1 exercise, Part A (version the data with DVC) [5] | Google Cloud Storage instead of the local S3 bucket; the key path only in `.dvc/config.local` (not in Git) |
 | `src/lakegeneva/common/baselines.py` | Trend-adjusted persistence and bootstrap interval suggested in the MS1 reviews (A1, A2/B2); moving-block bootstrap [8] | Written for this project |
+| `src/lakegeneva/common/forecasting.py` | A review of this repository found that "last reading + change" existed only inside the walk-forward test, so the live forecast would have had to repeat it by hand (training-serving skew) | Written for this project |
 | `src/lakegeneva/training/train.py` | Ridge regression and scaling from the scikit-learn documentation [13]; walk-forward test as planned in the MS2 summary (review points A1, B2) | Written for this project |
 | `src/lakegeneva/training/experiments.py` | SW09 lecture, "Your pipeline": baseline ladder, how much data, how often to retrain [14] | Own experiments on this project's data; the lecture's scripts are not used |
-| `src/lakegeneva/training/track.py` | Block 1 exercise solution, `train.py`: log the parameters, the git commit, the metrics and the model; register it; alias `champion` [5] | The DVC data version is logged too; the evaluation tables are saved with each run; a gate decides about the alias |
+| `src/lakegeneva/training/track.py` | Block 1 exercise solution, `train.py`: log the parameters, the git commit, the metrics and the model; register it; alias `champion` [5] | The DVC data version is logged too; the evaluation tables are saved with each run; the signature names the output (a change); a gate decides about the alias |
 | `DATACARD.md` | Block 1 lecture: document column names, dtypes and missing-value handling in a DATACARD.md [4] | Written for this project |
 
 **AI use:** Anthropic Claude helped me write and test the code and the documentation. 

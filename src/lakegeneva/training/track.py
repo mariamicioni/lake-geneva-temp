@@ -9,7 +9,8 @@ it only if it passes the promotion gate (see passes_gate below).
 # [5] in README.md: log the parameters, the git commit, the metrics and the model,
 # register every model, and move the alias "champion" to the one that is used.
 # Changed for this project: the data version from DVC is logged too, the evaluation
-# tables are saved with the run, and a gate decides about the alias.
+# tables are saved with the run, the signature names the model's output (a change,
+# not a temperature), and a gate decides about the alias.
 #
 # Where the runs go: to the address in the environment variable MLFLOW_TRACKING_URI
 # (DagsHub: https://dagshub.com/<user>/lake-geneva-temp.mlflow, with the user name and
@@ -27,6 +28,8 @@ import subprocess  # runs git to find the code and data versions
 from pathlib import Path  # the path of the DVC pointer file
 
 import pandas as pd  # the evaluation tables
+
+from lakegeneva.common import forecasting  # the name of the model's output (a change)
 
 # The MLflow experiment (a folder of runs) and the registered model.
 EXPERIMENT = "lake-geneva-temp"
@@ -131,6 +134,7 @@ def log_run(name: str, result: dict, rows: pd.DataFrame, versions: dict) -> str:
     """Log one trained model with everything needed to repeat it; return its model URI."""
     import mlflow
     import mlflow.sklearn
+    from mlflow.models import infer_signature  # builds the signature from example rows
 
     columns = result["columns"]
     with mlflow.start_run(run_name=name):
@@ -139,7 +143,8 @@ def log_run(name: str, result: dict, rows: pd.DataFrame, versions: dict) -> str:
                 "feature_set": name,
                 "features": ",".join(columns),
                 "alpha": result["alpha"],
-                # What the model predicts; the forecast is the last reading plus this.
+                # What the model predicts; the forecast is the last reading plus this
+                # (forecasting.temperature(), the same step in the test and live).
                 "target": "tomorrow's mean minus the last reading before 18:00",
                 "training_rows": len(rows),
                 "first_row": rows.index.min().date().isoformat(),
@@ -155,7 +160,17 @@ def log_run(name: str, result: dict, rows: pd.DataFrame, versions: dict) -> str:
         mlflow.log_text(result["forecast"].to_frame().join(rows[["water_last", "label_water_mean_d1"]]).to_csv(), "test_forecasts.csv")
         # The final model, trained on all rows. input_example: a few real rows, so the
         # model page shows which columns the model expects (its "signature").
-        info = mlflow.sklearn.log_model(result["model"], name="model", input_example=rows[columns].head(3))
+        example = rows[columns].head(3)
+        # The signature also names the OUTPUT. The registered model returns tomorrow's
+        # change (about -0.3 degC), not the temperature. Without a name, MLflow only
+        # says "a number", and a reader could take it for the temperature (found in a
+        # review on 15.11.2026). infer_signature reads the column names of the example
+        # rows and the name of the example answers; the name is "change_degC". It
+        # changes nothing in the model or its numbers, only the text on the model page.
+        # The temperature is made by forecasting.temperature_for_rows(model, rows).
+        answers = pd.Series(result["model"].predict(example), name=forecasting.MODEL_OUTPUT)
+        signature = infer_signature(example, answers)
+        info = mlflow.sklearn.log_model(result["model"], name="model", input_example=example, signature=signature)
         return info.model_uri
 
 

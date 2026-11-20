@@ -8,6 +8,8 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from lakegeneva.common import forecasting  # the shared step from the change to the temperature
+from lakegeneva.common.features import LABEL  # the column with tomorrow's mean (the truth)
 from lakegeneva.training import track, train
 from tests.test_train import fake_rows
 
@@ -157,6 +159,49 @@ def test_the_champion_is_the_full_model_and_loads_back(local_mlflow, trained):
     # The live forecast will load exactly this model: the same predictions, the same columns.
     assert np.allclose(loaded.predict(x), results["full"]["model"].predict(x))
     assert list(loaded.feature_names_in_) == train.FEATURES_FULL
+
+
+def test_the_champion_loaded_like_in_ms4_gives_a_temperature_not_a_change(local_mlflow, trained):
+    results, rows, features = trained
+    track.track(results, rows, features)
+
+    # How the live forecast (MS4) will get its model: by the alias "champion" from the
+    # registry. Then the shared function on the newest rows of the feature table.
+    champion = mlflow.sklearn.load_model(f"models:/{track.MODEL_NAME}@{track.CHAMPION}")
+    newest = rows.tail(5)
+    forecast = forecasting.temperature_for_rows(champion, newest)
+
+    # The model's own answer is tomorrow's CHANGE: small numbers around 0, far away
+    # from a water temperature (the fake last readings are between 8 and 21 degC).
+    change = champion.predict(newest[train.FEATURES_FULL])
+    truth = newest[LABEL]
+    assert np.abs(change).max() < 3
+    assert np.abs(change - truth).min() > 5
+    # The shared function gives a TEMPERATURE: within 1 degC of the true mean of
+    # tomorrow. (These rows were in the training data, so this says nothing about how
+    # good the model is. It only shows that the number is a temperature.)
+    assert (forecast - truth).abs().max() < 1
+    # It is the last reading plus that change, one forecast per date ...
+    assert np.allclose(forecast, newest["water_last"] + change)
+    assert forecast.index.equals(newest.index)
+    # ... and the same forecast as from the model before it was stored in MLflow.
+    assert np.allclose(forecast, forecasting.temperature_for_rows(results["full"]["model"], newest))
+
+
+def test_the_registered_model_says_that_its_output_is_a_change(local_mlflow, trained):
+    results, rows, features = trained
+    track.track(results, rows, features)
+
+    # The signature is what the model page in MLflow shows: the input columns and the
+    # output. get_model_info reads it without loading the model.
+    signature = mlflow.models.get_model_info(f"models:/{track.MODEL_NAME}@{track.CHAMPION}").signature
+
+    # The output has a name that says it is a change in degC. Before, it had no name,
+    # and a reader could take the number for the temperature.
+    assert signature.outputs.input_names() == [forecasting.MODEL_OUTPUT]
+    assert "change" in forecasting.MODEL_OUTPUT
+    # The inputs are still the ten feature columns, in the order of training.
+    assert signature.inputs.input_names() == train.FEATURES_FULL
 
 
 def test_a_model_that_fails_the_gate_does_not_take_the_alias(local_mlflow, trained, monkeypatch):
