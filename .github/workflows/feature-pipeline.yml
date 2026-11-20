@@ -112,8 +112,12 @@ jobs:
       #    (only that day's audit copy of the newest forecast cannot come back).
       #    A push with GitHub's built-in token never starts another workflow, so
       #    the data commit does not trigger CI.
+      #    Only a run of the main branch stores and pushes: a run started by hand on
+      #    another branch would put that branch's commits on main with `git push
+      #    origin HEAD:main` (found in a review on 18.11.2026; it never happened).
+      #    Such a run still downloads, builds and checks, it just publishes nothing.
       - name: Store the new data version
-        if: always() && steps.build.outcome == 'success'
+        if: always() && steps.build.outcome == 'success' && github.ref == 'refs/heads/main'
         run: |
           dvc add data/raw data/features
           dvc push

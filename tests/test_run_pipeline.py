@@ -92,5 +92,17 @@ def test_the_daily_job_stores_data_only_after_a_good_build():
     # A failed build must not save new raw files next to an old feature table.
     assert (
         "- name: Store the new data version\n"
-        "        if: always() && steps.build.outcome == 'success'\n"
+        "        if: always() && steps.build.outcome == 'success' && github.ref == 'refs/heads/main'\n"
     ) in workflow
+
+
+def test_only_the_main_branch_publishes_data_and_pushes():
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    # The step that runs dvc push and git push origin HEAD:main.
+    step = workflow[workflow.index("- name: Store the new data version") :]
+    step = step[: step.index("- name:", 1)]  # up to the next step
+    assert "git push origin HEAD:main" in step
+    # Its condition names the main branch: a run on another branch must never push its
+    # commits to main (found in a review on 18.11.2026).
+    condition = next(line for line in step.splitlines() if line.strip().startswith("if:"))
+    assert "github.ref == 'refs/heads/main'" in condition
