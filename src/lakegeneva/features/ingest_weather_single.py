@@ -85,6 +85,12 @@ def fetch_run(day: dt.date) -> dict | None:
             time.sleep(60)
 
 
+def has_values(hourly: dict) -> bool:
+    """True if the answer has at least one forecast hour with a value (not None)."""
+    # .get(v, []): a variable that is missing in the answer counts as "no value".
+    return any(value is not None for v in VARIABLES for value in hourly.get(v, []))
+
+
 def write_csv(runs: dict[dt.date, dict], fetched_at: dt.datetime, path: Path) -> None:
     # Create the output folder if it does not exist yet (no error if it does).
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -122,21 +128,29 @@ def main() -> None:
     start = args.start or end - dt.timedelta(days=6)
 
     runs: dict[dt.date, dict] = {}
-    skipped = []
+    skipped, empty = [], []
     day = start
     while day <= end:
         hourly = fetch_run(day)
         if hourly is None:
             skipped.append(str(day))
+        elif not has_values(hourly):
+            # An answer without hours, or with only empty values, is no downloaded run.
+            # Before, it was counted, and the script said "Saved 7 runs" with zero
+            # values in the file (found in a review on 18.11.2026; the stored data was
+            # not affected). The same rule as in ingest_weather_runs.py.
+            empty.append(str(day))
         else:
             runs[day] = hourly
         day += dt.timedelta(days=1)
         time.sleep(0.2)  # a short pause between requests, to be polite to the API
     if skipped:
         print(f"No 06:00 UTC run in the archive for {len(skipped)} day(s): {', '.join(skipped)}")
+    if empty:
+        print(f"The API answered without any value for {len(empty)} day(s): {', '.join(empty)}")
     if not runs:
         # SystemExit stops the script with an error, so the GitHub job turns red.
-        raise SystemExit("The API returned no run at all.")
+        raise SystemExit("The API returned no run with values.")
 
     # One file per run of the script, e.g. weather_geneva_single06_2024-08-10_to_2026-10-27.csv
     # A second run with the same range gets its own file (see common/raw_files.py).

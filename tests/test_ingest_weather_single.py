@@ -118,7 +118,8 @@ def test_main_daily_run_asks_for_today_and_the_6_days_before(monkeypatch, tmp_pa
 
     def fake_fetch_run(day):
         asked.append(day)
-        return {"time": [], **{v: [] for v in ingest_weather_single.VARIABLES}}
+        # One hour with values (an answer without values is not a run, see the test below).
+        return {"time": [f"{day}T06:00"], **{v: [1.0] for v in ingest_weather_single.VARIABLES}}
 
     monkeypatch.setattr(ingest_weather_single, "fetch_run", fake_fetch_run)
     monkeypatch.setattr(ingest_weather_single.time, "sleep", lambda seconds: None)
@@ -129,3 +130,42 @@ def test_main_daily_run_asks_for_today_and_the_6_days_before(monkeypatch, tmp_pa
 
     today = dt.datetime.now(dt.timezone.utc).date()
     assert asked == [today - dt.timedelta(days=n) for n in range(6, -1, -1)]  # 7 days, oldest first
+
+
+def test_answers_without_values_are_not_counted_as_runs(monkeypatch, tmp_path, capsys):
+    # Seven answers: five without any hour, one with hours but only empty values, and one
+    # real run (04.08). Before, all seven counted as "saved runs" (review of 18.11.2026).
+    def fake_fetch_run(day):
+        if day == dt.date(2025, 8, 4):
+            return {"time": ["2025-08-04T06:00"], **{v: [2.0] for v in ingest_weather_single.VARIABLES}}
+        if day == dt.date(2025, 8, 5):
+            return {"time": ["2025-08-05T06:00"], **{v: [None] for v in ingest_weather_single.VARIABLES}}
+        return {"time": [], **{v: [] for v in ingest_weather_single.VARIABLES}}
+
+    monkeypatch.setattr(ingest_weather_single, "fetch_run", fake_fetch_run)
+    monkeypatch.setattr(ingest_weather_single.time, "sleep", lambda seconds: None)
+    monkeypatch.setattr(
+        "sys.argv", ["ingest_weather_single.py", "--start", "2025-08-01", "--end", "2025-08-07", "--out", str(tmp_path)]
+    )
+
+    ingest_weather_single.main()
+
+    out = capsys.readouterr().out
+    # Only the real run is saved; the six days without values are named.
+    assert "Saved 1 runs" in out
+    assert "without any value for 6 day(s)" in out
+
+
+def test_only_answers_without_values_turn_the_job_red(monkeypatch, tmp_path):
+    # Every answer is empty: no file, and SystemExit, so the GitHub job turns red.
+    monkeypatch.setattr(
+        ingest_weather_single, "fetch_run", lambda day: {"time": [], **{v: [] for v in ingest_weather_single.VARIABLES}}
+    )
+    monkeypatch.setattr(ingest_weather_single.time, "sleep", lambda seconds: None)
+    monkeypatch.setattr(
+        "sys.argv", ["ingest_weather_single.py", "--start", "2025-08-01", "--end", "2025-08-07", "--out", str(tmp_path)]
+    )
+
+    with pytest.raises(SystemExit):
+        ingest_weather_single.main()
+    assert list(tmp_path.iterdir()) == []  # no file was written
