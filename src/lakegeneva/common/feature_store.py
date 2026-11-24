@@ -21,6 +21,7 @@ points to exactly one data version.
 import hashlib  # md5 of the table that was really read
 import io  # reads the table from the bytes that were hashed
 import json  # reads the DVC list of files of a data version
+import re  # the exact form of a DVC pointer
 import shutil  # finds out whether git is installed
 import subprocess  # runs git and dvc
 import tempfile  # a folder for a table fetched with dvc get, deleted afterwards
@@ -39,18 +40,32 @@ DVC_CACHE = Path(".dvc/cache/files/md5")
 TAG_PATTERN = "data-*"
 # What git_available() is false for: no git on this computer, or no Git repository here.
 NO_GIT = "unknown"
+# The only form of data/features.dvc that is accepted (see pointer_md5): the six lines
+# DVC 3 writes for one output folder "features", one pattern per line.
+POINTER_FORM = (
+    re.compile(r"outs:"),
+    re.compile(r"- md5: ([0-9a-f]{32}\.dir)"),
+    re.compile(r"  size: \d+"),
+    re.compile(r"  nfiles: \d+"),
+    re.compile(r"  hash: md5"),
+    re.compile(r"  path: features"),
+)
 
 
-def git(*args: str, input: str | None = None) -> str:
-    """The output of one git command, or "" if it fails or git is not available."""
+def git(*args: str, input: str | None = None, strip: bool = True) -> str:
+    """The output of one git command, or "" if it fails or git is not available.
+
+    strip=False keeps spaces at the ends (for lists of names, e.g. tags).
+    """
     try:
         # encoding="utf-8": Git writes UTF-8; Windows would otherwise read it as CP1252 and
         # a tag name with an accent would not match (review of 24.11.2026).
-        return subprocess.check_output(
+        output = subprocess.check_output(
             ["git", *args], text=True, encoding="utf-8", errors="replace", input=input, stderr=subprocess.DEVNULL
-        ).strip()
+        )
     except (OSError, subprocess.CalledProcessError):
         return ""
+    return output.strip() if strip else output
 
 
 def git_available() -> bool:
@@ -66,22 +81,20 @@ def file_md5(path: Path) -> str:
 
 
 def pointer_md5(text: str) -> str:
-    """The data version named in a DVC pointer: its line "- md5: <hash>.dir" ("" if none)."""
-    # Only a pointer with exactly one output, the folder of the feature table
-    # ("path: features"), names a version of the table. If the output were renamed,
-    # `dvc get` would fetch it only under the new name, and an old table left in
-    # data/features/ would look like this version (review of 24.11.2026; all 31
-    # pointers in the history up to then use "features").
-    md5s, paths = [], []
-    for line in text.splitlines():
-        line = line.strip()
-        if line.startswith("- md5:"):
-            md5s.append(line.split(":", 1)[1].strip())
-        elif line.startswith("path:"):
-            paths.append(line.split(":", 1)[1].strip())
-    if len(md5s) != 1 or paths != [FEATURES_FILE.parent.name]:
+    """The data version named in a DVC pointer: its "<hash>.dir" ("" if the pointer has another form)."""
+    # Only a pointer in exactly the form DVC writes for the feature table counts: the
+    # six lines below, in this order, nothing else. Every other form is rejected, even
+    # valid YAML: a renamed output ("path: archive"), a moved working folder ("wdir:"),
+    # the same key in quotes ('"wdir": archive') or any other field could make DVC fetch
+    # the table from somewhere else, so a table left in data/features/ would look like
+    # this version (reviews of 24.11.2026). All 31 pointers in the history up to then
+    # have exactly this form. If a future DVC version writes another form, training is
+    # still logged, but no model is registered and the run turns red: then this list
+    # has to be checked again.
+    lines = [line for line in text.replace("\r\n", "\n").split("\n") if line != ""]
+    if len(lines) != len(POINTER_FORM) or not all(form.fullmatch(line) for form, line in zip(POINTER_FORM, lines)):
         return ""
-    return md5s[0]
+    return POINTER_FORM[1].fullmatch(lines[1]).group(1)
 
 
 def tag_pointers() -> dict:
@@ -90,9 +103,10 @@ def tag_pointers() -> dict:
     # (review of 24.11.2026). `git cat-file --batch` reads all pointers in one process:
     # for each line "<tag>:data/features.dvc" it answers "<id> blob <size>" and the
     # file, or "<name> missing" if that tag has no pointer.
-    # splitlines(), not split(): one tag per line, and a tag name may contain a space
-    # that is not a line break, e.g. a no-break space (review of 24.11.2026).
-    tags = git("tag", "--list", TAG_PATTERN).splitlines()
+    # Git ends each name with a line feed ("\n") and nothing else. So the list is cut
+    # only there: not at other spaces or Unicode line separators that a tag name may
+    # contain, and spaces at the end of a name are kept (review of 24.11.2026).
+    tags = [tag for tag in git("tag", "--list", TAG_PATTERN, strip=False).split("\n") if tag]
     if not tags:
         return {}
     # refs/tags/<tag>^{commit}: the commit the tag stands for. A tag that points to

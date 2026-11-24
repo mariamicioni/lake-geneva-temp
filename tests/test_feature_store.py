@@ -7,6 +7,7 @@ import hashlib
 import io
 import json
 import subprocess
+from pathlib import Path
 from types import SimpleNamespace
 
 import pandas as pd
@@ -32,8 +33,12 @@ def dvc_list(table_md5: str) -> tuple[str, bytes]:
 
 
 def pointer_text(dir_md5: str, path: str = "features") -> str:
-    """A DVC pointer like data/features.dvc."""
-    return f"outs:\n- md5: {dir_md5}\n  path: {path}\n"
+    """A DVC pointer exactly like data/features.dvc (the six lines DVC 3 writes)."""
+    return f"outs:\n- md5: {dir_md5}\n  size: 257841\n  nfiles: 1\n  hash: md5\n  path: {path}\n"
+
+
+# The hash of a second data version (any 32 hex digits + ".dir").
+OTHER = "f" * 32 + ".dir"
 
 
 def put_list(cache, dir_md5: str, content: bytes) -> None:
@@ -200,7 +205,7 @@ def test_the_hash_belongs_to_exactly_the_table_that_was_read(tmp_path, monkeypat
 def test_an_uncommitted_pointer_keeps_its_tag(repo):
     # A second version is committed, then the pointer is set back to the first version
     # without a commit (e.g. after `git checkout data-2026-11-24 -- data/features.dvc`).
-    repo.pointer.write_text(pointer_text("ff99ee.dir"), encoding="utf-8")
+    repo.pointer.write_text(pointer_text(OTHER), encoding="utf-8")
     run_git("commit", "-q", "-am", "chore(data): daily update 2026-11-25")
     repo.pointer.write_text(pointer_text(repo.dir), encoding="utf-8")
     check_out_table_a(repo)
@@ -218,7 +223,7 @@ def test_the_commit_named_must_store_exactly_the_verified_table(repo):
     # Version A (tagged) is committed, then version B. The checked-out table and pointer
     # are A again, but Git is told to ignore the change (assume-unchanged), so
     # `git status` looks clean and the newest commit of the pointer is B's.
-    repo.pointer.write_text(pointer_text("ff99ee.dir"), encoding="utf-8")
+    repo.pointer.write_text(pointer_text(OTHER), encoding="utf-8")
     run_git("commit", "-q", "-am", "chore(data): daily update 2026-11-25")
     commit_b = run_git("rev-parse", "HEAD")
     run_git("update-index", "--assume-unchanged", "data/features.dvc")
@@ -243,7 +248,7 @@ def test_the_data_tag_names_the_version_of_its_pointer(repo):
     run_git("tag", "ms3")
     assert feature_store.data_tag(repo.dir) == "data-2026-11-24"
     # Another data version has no tag yet.
-    assert feature_store.data_tag("ff99ee.dir") == "none"
+    assert feature_store.data_tag(OTHER) == "none"
 
 
 def test_a_tag_on_a_later_commit_with_the_same_pointer_counts(repo, monkeypatch):
@@ -408,3 +413,55 @@ def test_a_version_is_proven_only_if_dvc_confirms_it_and_it_can_be_got_back():
     assert not feature_store.is_proven(proven | {"data_matches_dvc": "no"})
     assert not feature_store.is_proven(proven | {"data_commit": "not committed"})
     assert feature_store.is_proven(proven | {"data_commit": "not committed", "data_tag": "data-v1"})
+
+
+def test_a_pointer_with_another_working_folder_is_not_the_feature_table(tmp_path):
+    features, pointer, cache, dir_md5 = fake_dvc(tmp_path, b"the stored table")
+    # "wdir: archive" moves the output to data/archive/features: a table left in
+    # data/features/ is not this version, even with "path: features".
+    pointer.write_text(f"wdir: archive\n{pointer_text(dir_md5)}", encoding="utf-8")
+
+    version = feature_store.data_version(features, pointer=pointer, cache=cache)
+
+    assert version["data_matches_dvc"] == "unknown"
+
+
+def test_only_the_exact_form_dvc_writes_is_accepted():
+    dir_md5 = "a" * 32 + ".dir"
+    assert feature_store.pointer_md5(pointer_text(dir_md5)) == dir_md5
+    # Windows line ends are the same pointer.
+    assert feature_store.pointer_md5(pointer_text(dir_md5).replace("\n", "\r\n")) == dir_md5
+    # Valid YAML in another form is not accepted: the same key in quotes (found in a
+    # review on 24.11.2026), a working folder (also "."), another field, a renamed
+    # output, a second output.
+    for other_form in (
+        f'"wdir": archive\n{pointer_text(dir_md5)}',
+        f"wdir: .\n{pointer_text(dir_md5)}",
+        pointer_text(dir_md5) + "  cache: false\n",
+        pointer_text(dir_md5, path="archive"),
+        pointer_text(dir_md5) + pointer_text(dir_md5).replace("outs:\n", ""),
+    ):
+        assert feature_store.pointer_md5(other_form) == ""
+
+
+def test_the_real_pointer_of_this_repository_is_accepted():
+    # data/features.dvc as the feature pipeline commits it every evening: if DVC ever
+    # writes another form, this test shows it before training stops registering models.
+    real = Path(__file__).parent.parent / "data" / "features.dvc"
+
+    assert feature_store.pointer_md5(real.read_text(encoding="utf-8")).endswith(".dir")
+
+
+def test_tag_names_are_cut_only_at_line_feeds(repo):
+    # A no-break space at the end of a name, and a Unicode line separator inside one:
+    # both are allowed in tag names and must stay part of the name.
+    ending = "data-end "
+    inside = "data-a ms3"
+    run_git("tag", ending)
+    run_git("tag", inside)
+    run_git("tag", "ms3")  # not a data tag
+
+    tags = feature_store.data_tag(repo.dir).split(",")
+
+    assert ending in tags and inside in tags
+    assert "ms3" not in tags and "data-end" not in tags
