@@ -192,7 +192,9 @@ def evaluate(rows: pd.DataFrame, forecast: pd.Series) -> pd.DataFrame:
     part = rows.loc[forecast.index]
     error_model = (forecast - part[features.LABEL]).abs()
     error_persistence = (baselines.persistence(part) - part[features.LABEL]).abs()
-    error_trend = (baselines.trend_adjusted(part) - part[features.LABEL]).abs()
+    # The target baseline: trend-adjusted persistence with the factor that was chosen
+    # on the validation days and frozen (baselines.TREND_FACTOR, MS2 review point B1).
+    error_trend = (baselines.target_baseline(part) - part[features.LABEL]).abs()
     # October to January by the day that is forecast (tomorrow), as in baselines.py.
     forecast_month = (part.index + pd.Timedelta(days=1)).month
     windows = {
@@ -209,23 +211,24 @@ def evaluate(rows: pd.DataFrame, forecast: pd.Series) -> pd.DataFrame:
             mae_trend = error_trend[in_window].mean()
             row |= {
                 "model": mae_model,
+                # Plain persistence: only for comparison, it decides nothing.
                 "persistence": mae_persistence,
                 "trend_adjusted": mae_trend,
-                # The success criterion of the README: 20 % below the STRONGER of the
-                # two baselines on the same days, the same rule as baselines.report().
-                # Before, this was always persistence (found in a review on 15.11.2026).
-                # Today persistence is the stronger one in every window, so the
-                # target does not change; it would if trend-adjusted got better.
-                "target": (1 - baselines.TARGET_GAIN) * min(mae_persistence, mae_trend),
-                # The gain and the interval below stay against plain persistence: the
-                # README and the gate (track.py) compare with it.
-                "gain_%": 100 * (1 - mae_model / mae_persistence),
+                # The success criterion of the README: 20 % below the TARGET baseline
+                # on the same days. Always the same baseline: before, it was the
+                # better of the two on these days, so it could switch as test days
+                # came in (MS2 review point B1). The number itself still moves a
+                # little with every new test day; the baseline and its factor do not.
+                "target": baselines.target_mae(mae_trend),
+                # The gain against the same baseline, so "gain_% >= 20" means the
+                # target is met.
+                "gain_%": 100 * (1 - mae_model / mae_trend),
             }
         if row["days"] >= baselines.MIN_DAYS_BOOTSTRAP:
-            # model - persistence: below 0 means the model is better. The interval
+            # model - target baseline: below 0 means the model is better. The interval
             # says how sure that is (moving-block bootstrap, as for the baselines).
             row["diff"], row["ci_low"], row["ci_high"] = baselines.bootstrap_mae_difference(
-                error_model[in_window], error_persistence[in_window]
+                error_model[in_window], error_trend[in_window]
             )
         result.append(row)
     return pd.DataFrame(result).set_index("window")

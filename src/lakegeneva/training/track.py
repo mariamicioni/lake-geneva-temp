@@ -32,7 +32,7 @@ from pathlib import Path  # the path of the DVC pointer file
 
 import pandas as pd  # the evaluation tables
 
-from lakegeneva.common import forecasting  # the name of the model's output (a change)
+from lakegeneva.common import baselines, forecasting  # the frozen trend factor; the name of the model's output (a change)
 from lakegeneva.training import gate  # the four checks that decide about the alias
 
 # The MLflow experiment (a folder of runs) and the registered model.
@@ -50,7 +50,9 @@ COLUMN_NAMES = {
     "days": "days",
     "model": "mae",
     "persistence": "mae_persistence",
-    "trend_adjusted": "mae_trend_adjusted",  # the second baseline: the target uses the stronger one
+    # The target baseline (frozen factor, param trend_factor). Runs before 20.11.2026
+    # logged here the factor 1/3, and their target came from the better baseline.
+    "trend_adjusted": "mae_trend_adjusted",
     "target": "target",
     "gain_%": "gain_pct",
     "diff": "diff",
@@ -141,6 +143,11 @@ def log_run(name: str, result: dict, rows: pd.DataFrame, versions: dict, summary
                 # What the model predicts; the forecast is the last reading plus this
                 # (forecasting.temperature(), the same step in the test and live).
                 "target": "tomorrow's mean minus the last reading before 18:00",
+                # The baseline of the 20 % target, frozen on the validation days (MS2
+                # review point B1). With it, runs from before and after the change can
+                # be told apart: the older runs have no trend_factor.
+                "target_baseline": "water_last + trend_factor * water_trend_3d",
+                "trend_factor": baselines.TREND_FACTOR,
                 "training_rows": len(rows),
                 "first_row": rows.index.min().date().isoformat(),
                 "last_row": rows.index.max().date().isoformat(),
@@ -176,7 +183,7 @@ def log_run(name: str, result: dict, rows: pd.DataFrame, versions: dict, summary
 
 
 def meets_target(evaluation: pd.DataFrame) -> bool:
-    """The success criterion of the README: 20 % below persistence on all test days AND on the big-change days."""
+    """The success criterion of the README: 20 % below the target baseline on all test days AND on the big-change days."""
     # The README has two targets, and both must be met (found in a review on 14.11.2026:
     # the first version checked only all test days). A window that is missing or has
     # no MAE counts as not met: a target cannot be met on days that were not tested.

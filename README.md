@@ -17,20 +17,28 @@ Built as the MLOps HS26 semester project (HSLU) with the Feature / Training / In
 ## Goal and success criterion
 Every evening on day D the model predicts the mean water temperature of D+1 from the data before the 18:00 cutoff. BAFU publishes its readings about 1.5 hours late, so the forecast is ready after the evening job, not at 18:00 itself: at 20:00 Swiss time in winter and 21:00 in summer at the earliest (3 to 28 hours ahead), and later when GitHub starts the job late (around midnight in late October 2026). This changes the "18:00" of the proposal. A forecast at 18:00 sharp would only have the readings until about 16:30, and persistence would be about 4 % worse (checked on 30.10.2026).
 
-The model succeeds if its MAE is **at least 20 % lower than the MAE of the stronger baseline, on the same days**:
-- **Main target:** the test days from 21.01.2025 on. For each test day the model is trained again on the earlier days whose label is already known at 18:00 of that day (walk-forward evaluation in MS3). The day just before is not used, because its label is the mean of the test day itself. The first year with all features (21.01.2024–20.01.2025, 366 days) is for validation: it is used to choose the model settings and never counts for the target. The same rule holds there: the settings use the validation days up to 19.01.2025, whose labels are known at 18:00 on the first test day.
+The model succeeds if its MAE is **at least 20 % lower than the MAE of the target baseline, on the same days**:
+- **Main target:** the test days from 21.01.2025 on. For each test day the model is trained again on the earlier days whose label is already known at 18:00 of that day (walk-forward evaluation in MS3). The day just before is not used, because its label is the mean of the test day itself. The first year with all features (21.01.2024–20.01.2025, 366 days) is for validation: it is used to choose the model settings and the target baseline and never counts for the target. The same rule holds there: both use the validation days up to 19.01.2025, whose labels are known at 18:00 on the first test day.
 - **Target on the big-change days:** the test days on which tomorrow's mean differs by more than 0.8 °C from today's last reading before 18:00. On these days persistence fails.
-- **Reported, not a target:** October–January (177 test days on 14.11.2026, on which plain and trend-adjusted persistence do not differ clearly; only 7 of them are big-change days, too few for a target) and the live period October 2026 – January 2027 (monitoring in MS4).
+- **Reported, not a target:** October–January (177 test days on 14.11.2026; only 7 of them are big-change days, too few for a target) and the live period October 2026 – January 2027 (monitoring in MS4).
 
-The stronger baseline is plain persistence, the last reading before 18:00. Trend-adjusted persistence (the last reading plus a third of the 3-day trend, suggested in the MS1 reviews) is worse:
+The **target baseline** is trend-adjusted persistence: the last reading before 18:00 plus a factor times the 3-day trend. The factor was chosen once, on the 365 validation days only, as the one with the lowest MAE, and then frozen in `baselines.py` (20.11.2026, MS2 review point B1). Before, the target used the better of plain and trend-adjusted persistence on the test days themselves, so it could switch as new test days came in.
 
-| Test days (21.01.2025–12.11.2026, 18:00 cutoff) | Days | Persistence MAE | Trend-adjusted MAE | Target MAE (−20 %) |
+| Validation days (21.01.2024–19.01.2025) | MAE |
+|---|---|
+| plain persistence (factor 0) | 0.506 °C |
+| factor 1/3 (one day of the trend, suggested in the MS1 reviews) | 0.746 °C |
+| **factor −0.075** (lowest MAE, frozen) | **0.495 °C** |
+
+The factor is negative: tomorrow tends to move a little against the 3-day trend. Its gain over plain persistence on the validation days is small (95 % interval −0.0245 to −0.0001 °C), and it was fitted on those same days, so it is no proof that it is better on new days. It is a fixed choice: the target never switches back to plain persistence, also where persistence is better on the test days (all test days: 0.526 against 0.530 °C). Plain persistence stays in every table, for comparison.
+
+| Test days (21.01.2025–12.11.2026, 18:00 cutoff) | Days | Persistence MAE | Target baseline MAE | Target MAE (−20 %) |
 |---|---|---|---|---|
-| all test days | 661 | 0.526 °C | 0.723 °C | ≤ 0.421 °C |
-| change > 0.8 °C | 101 | 1.930 °C | 2.111 °C | ≤ 1.544 °C |
-| October–January (reported) | 177 | 0.281 °C | 0.328 °C | (0.225 °C) |
+| all test days | 661 | 0.526 °C | 0.530 °C | ≤ 0.424 °C |
+| change > 0.8 °C | 101 | 1.930 °C | 1.897 °C | ≤ 1.518 °C |
+| October–January (reported) | 177 | 0.281 °C | 0.306 °C | (0.245 °C) |
 
-Numbers of 14.11.2026. Every new day adds one test day, so they move a little (on 27.10.2026, in the MS2 summary: 643 test days and a target of 0.425 °C). `python src/lakegeneva/common/baselines.py` recomputes them with 95 % bootstrap intervals [8] (blocks of 7 calendar days). The criterion changed since the proposal; `docs/ms2_summary.pdf` explains why (MS1 review points A1, A2/B2, B3).
+Numbers of 14.11.2026. Every new day adds one test day, so the numbers move a little; the baseline and its factor do not (on 27.10.2026, in the MS2 summary, with the old rule: 643 test days and a target of 0.425 °C). `python src/lakegeneva/common/baselines.py` recomputes them with 95 % bootstrap intervals [8] (blocks of 7 calendar days) and fits the factor again as a check. The criterion changed since the proposal; `docs/ms2_summary.pdf` explains why (MS1 review points A1, A2/B2, B3).
 
 ## Related work and what is different here
 - **KTH ID2223 2025/26, "Water Temperature at Södertälje"** [10]: predicts the water temperature at bathing sites in Södertälje from municipality open data and Open-Meteo forecasts.
@@ -76,14 +84,14 @@ Results on the 661 test days (21.01.2025–12.11.2026), every row on the same da
 | | MAE, all test days | MAE, change > 0.8 °C (101 days) | One training |
 |---|---|---|---|
 | 1 Persistence: the last reading before 18:00 | 0.526 °C | 1.930 °C | none |
-| 2 Trend-adjusted persistence | 0.723 °C | 2.111 °C | none |
+| 2 Trend-adjusted persistence, factor −0.075 (the target baseline) | 0.530 °C | 1.897 °C | none |
 | 3 Persistence plus the average change so far | 0.467 °C | 1.768 °C | none |
 | 4 Ridge, water features only | 0.438 °C | 1.618 °C | about 4 ms |
 | 5 Ridge, all features (the registered model) | 0.437 °C | 1.547 °C | about 4 ms |
-| Target: 20 % below the stronger of rows 1 and 2 (row 1) | ≤ 0.421 °C | ≤ 1.544 °C | |
+| Target: 20 % below row 2 | ≤ 0.424 °C | ≤ 1.518 °C | |
 
 What the numbers say:
-- **Clearly better than persistence, but both targets are missed so far.** The model is 17 % better on all test days (95 % interval of the difference: −0.121 to −0.059 °C) and 19.9 % better on the big-change days (−0.467 to −0.312 °C), where it misses the target by 0.003 °C.
+- **Clearly better than both baselines, but both targets are missed so far.** Against the target baseline (row 2) the model is 17.5 % better on all test days (95 % interval of the difference: −0.126 to −0.063 °C) and 18.5 % better on the big-change days (−0.447 to −0.267 °C). It misses the two targets by 0.013 and 0.029 °C. Against plain persistence (row 1) it is 17 % and 19.9 % better.
 - **Most of the gain is one number.** The last reading before 18:00 is an afternoon value: on average it is 0.31 °C warmer than tomorrow's mean. Row 3 corrects this without any feature and already gains 11 %. Against row 3 the model gains 6 % on all test days and 12.5 % on the big-change days (intervals −0.046 to −0.015 °C and −0.270 to −0.178 °C).
 - **The weather features help only on the big-change days** (MS1 review point B2). There the full model is 0.071 °C better than the water-only model (−0.102 to −0.042 °C). Over all test days the two are equal (−0.013 to +0.010 °C).
 - **All earlier days are used for training.** With only the last 12 months, the error on the big-change days is 1.605 °C instead of 1.547 °C.
@@ -200,7 +208,7 @@ I build this project on what the MLOps HS26 course teaches. When a file follows 
 | `src/lakegeneva/features/check_fresh.py` | A review of this repository found that a source sending old data would keep the job green | Written for this project |
 | `src/lakegeneva/features/run_pipeline.py` | The steps of the daily job (`feature-pipeline.yml`); "no shell tricks" from the Block 3 exercise [12] | Written for this project |
 | `.dvc/config`, `data/raw.dvc`, `data/features.dvc` | Block 1 exercise, Part A (version the data with DVC) [5] | Google Cloud Storage instead of the local S3 bucket; the key path only in `.dvc/config.local` (not in Git) |
-| `src/lakegeneva/common/baselines.py` | Trend-adjusted persistence and bootstrap interval suggested in the MS1 reviews (A1, A2/B2); moving-block bootstrap [8] | Written for this project |
+| `src/lakegeneva/common/baselines.py` | Trend-adjusted persistence and bootstrap interval suggested in the MS1 reviews (A1, A2/B2); its factor fitted and frozen on the validation days as asked in the MS2 reviews (B1); moving-block bootstrap [8] | Written for this project |
 | `src/lakegeneva/common/forecasting.py` | A review of this repository found that "last reading + change" existed only inside the walk-forward test, so the live forecast would have had to repeat it by hand (training-serving skew) | Written for this project |
 | `src/lakegeneva/training/train.py` | Ridge regression and scaling from the scikit-learn documentation [13]; walk-forward test as planned in the MS2 summary (review points A1, B2) | Written for this project |
 | `src/lakegeneva/training/experiments.py` | SW09 lecture, "Your pipeline": baseline ladder, how much data, how often to retrain [14] | Own experiments on this project's data; the lecture's scripts are not used |

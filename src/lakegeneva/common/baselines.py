@@ -1,8 +1,9 @@
 """The two baselines the model has to beat, and how they are compared.
 
 - persistence: tomorrow's mean = the last reading before 18:00 today
-- trend-adjusted persistence: the same plus one day of the recent 3-day trend
-  (suggested by both MS1 reviewers, points A2/B2)
+- trend-adjusted persistence: the same plus a factor times the 3-day trend
+  (suggested by both MS1 reviewers, points A2/B2). The factor was chosen once, on
+  the validation days, and is frozen: this is the baseline of the success criterion.
 
     python src/lakegeneva/common/baselines.py    # prints the comparison table
 """
@@ -22,8 +23,8 @@ from lakegeneva.common import features  # the shared feature table and its colum
 # Days on which tomorrow's mean differs by more than 0.8 °C from the last
 # reading: the days where persistence fails (proposal, review point B3).
 BIG_CHANGE = 0.8
-# Success criterion: at least 20 % lower MAE than the stronger baseline, on the
-# same days.
+# Success criterion: at least 20 % lower MAE than the target baseline (below), on
+# the same days.
 TARGET_GAIN = 0.20
 # The test days (review point A1): the first year with all features (21.01.2024
 # to 20.01.2025) is for validation, to choose the model settings in MS3, so it
@@ -32,6 +33,33 @@ TARGET_GAIN = 0.20
 # known at 18:00 (walk-forward). The day just before is not used: its label is
 # the mean of the test day itself, and that day is not over at 18:00.
 TEST_START = pd.Timestamp("2025-01-21")
+# The first day with all features: the validation days run from here to 19.01.2025.
+VALIDATION_START = pd.Timestamp("2024-01-21")
+
+# --- The target baseline: chosen on the validation days, then frozen ------------
+# Before, the target was 20 % below the STRONGER of the two baselines on each
+# window's own test days. Then the choice could switch as new test days came in,
+# and the target moved with it (MS2 editorial summary, point B1). Now the baseline
+# and its trend factor were chosen ONCE, on the validation days only, on 20.11.2026:
+# - the days: 21.01.2024 to 19.01.2025, every day with all features and a label
+#   (365 days). 20.01.2025 is left out: its label is the mean of 21.01.2025, the
+#   first test day (the same rule as train.known_at_18).
+# - the factor: the one with the lowest MAE on a grid from -1 to +1 in steps of
+#   0.005 (fit_trend_factor() below; the MAE because the target is an MAE).
+# Result: factor -0.075, MAE 0.4949 degC, against 0.5062 degC for plain persistence
+# (factor 0) and 0.7459 degC for the factor 1/3 of the MS1 reviews. So this is the
+# stronger baseline on the validation days, and it is the target baseline from now on.
+# The factor is NEGATIVE: tomorrow tends to move a little AGAINST the 3-day trend
+# ("mean-reverting persistence"). The gain over persistence is small (95 % interval
+# -0.0245 to -0.0001 degC) and the factor was fitted on those same days, so this is no
+# proof that it is better on new days. It is a fixed choice: the target never
+# switches back to plain persistence, also when persistence is better on some test
+# days. Plain persistence stays in every table, for comparison.
+# `python src/lakegeneva/common/baselines.py` fits the factor again, as a check.
+TREND_FACTOR = -0.075
+# The factors that fit_trend_factor() tries: -1.000, -0.995, ..., +1.000 (0 included).
+TREND_GRID = np.round(np.arange(-1, 1.0001, 0.005), 3)
+
 # Bootstrap: blocks of 7 days, 2,000 new test sets, a fixed seed (the same
 # interval on every run).
 BLOCK_DAYS = 7
@@ -48,10 +76,42 @@ def persistence(table: pd.DataFrame) -> pd.Series:
     return table["water_last"]
 
 
-def trend_adjusted(table: pd.DataFrame) -> pd.Series:
-    """Persistence plus a third of the 3-day trend (the change of one day)."""
-    # water_trend_3d is the change over three days, so /3 is the change per day.
-    return table["water_last"] + table["water_trend_3d"] / 3
+def trend_adjusted(table: pd.DataFrame, factor: float = TREND_FACTOR) -> pd.Series:
+    """Persistence plus `factor` times the 3-day trend (by default the frozen factor)."""
+    # water_trend_3d is the change over three days. The MS1 reviews suggested a third
+    # of it (one day of the trend); the factor fitted on the validation days is -0.075.
+    return table["water_last"] + factor * table["water_trend_3d"]
+
+
+def target_baseline(table: pd.DataFrame) -> pd.Series:
+    """The baseline of the success criterion: trend-adjusted persistence with the frozen factor."""
+    # One function, so train.py, experiments.py and this file all use the same one.
+    return trend_adjusted(table, TREND_FACTOR)
+
+
+def target_mae(baseline_mae: float) -> float:
+    """What the model must reach: 20 % below the MAE of the target baseline on the same days."""
+    return (1 - TARGET_GAIN) * baseline_mae
+
+
+def validation_days(table: pd.DataFrame) -> pd.DataFrame:
+    """The rows on which the target baseline was chosen: all features and a label, before the test days."""
+    complete = table[features.FEATURES + [features.LABEL]].notna().all(axis=1)
+    # Up to two days before TEST_START: the label of the day before is the mean of
+    # the first test day, which is not over at 18:00 on that day.
+    last_day = TEST_START - pd.Timedelta(days=2)
+    return table[complete & (table.index >= VALIDATION_START) & (table.index <= last_day)]
+
+
+def fit_trend_factor(rows: pd.DataFrame) -> tuple[float, pd.Series]:
+    """The trend factor with the lowest MAE on `rows`, and the MAE of every factor tried."""
+    # How TREND_FACTOR was found. Only for the validation days: fitted on test days,
+    # the baseline would again depend on the days it is judged on.
+    errors = pd.Series(
+        {factor: (trend_adjusted(rows, factor) - rows[features.LABEL]).abs().mean() for factor in TREND_GRID}
+    )
+    # idxmin: the factor of the smallest error (the first one if two are equal).
+    return float(errors.idxmin()), errors
 
 
 def big_change_days(table: pd.DataFrame) -> pd.Series:
@@ -119,9 +179,13 @@ def report(table: pd.DataFrame) -> pd.DataFrame:
     forecast_month = (table.index + pd.Timedelta(days=1)).month
     oct_jan = pd.Series(forecast_month.isin([10, 11, 12, 1]), index=table.index)
     big = big_change_days(table)
+    # The days on which the target baseline was chosen (see TREND_FACTOR).
+    validation = pd.Series(table.index.isin(validation_days(table).index), index=table.index)
     # The days that count for the success criterion: all features, from TEST_START on.
     test = all_features & (table.index >= TEST_START)
     windows = {
+        "validation, all year": validation,
+        "validation, change > 0.8": validation & big,
         "test, all year": test,
         "test, Oct-Jan": test & oct_jan,
         "test, change > 0.8": test & big,
@@ -140,7 +204,7 @@ def report(table: pd.DataFrame) -> pd.DataFrame:
         part = table[in_window]
         # The error of each baseline on each day (°C, without sign).
         error_persistence = (persistence(part) - part[features.LABEL]).abs()
-        error_trend = (trend_adjusted(part) - part[features.LABEL]).abs()
+        error_trend = (target_baseline(part) - part[features.LABEL]).abs()
         row = {"window": name, "days": len(part)}
         if len(part) > 0:
             mae_persistence, mae_trend = error_persistence.mean(), error_trend.mean()
@@ -150,9 +214,9 @@ def report(table: pd.DataFrame) -> pd.DataFrame:
                 "persistence": mae_persistence,
                 "trend_adjusted": mae_trend,
                 "trend_minus_persistence": mae_trend - mae_persistence,
-                "stronger": "persistence" if mae_persistence <= mae_trend else "trend-adjusted",
-                # What the model must reach: 20 % below the stronger baseline.
-                "target_mae": (1 - TARGET_GAIN) * min(mae_persistence, mae_trend),
+                # What the model must reach: 20 % below the TARGET baseline, always the
+                # same one (no longer the better of the two on these days).
+                "target_mae": target_mae(mae_trend),
             }
         if len(part) >= MIN_DAYS_BOOTSTRAP:
             # The first value (the difference) is already in the row, so "_" skips it.
@@ -174,6 +238,18 @@ def main() -> None:
     mean_d0 = (part["water_mean_d0"] - part[features.LABEL]).abs().mean()
     last = (persistence(part) - part[features.LABEL]).abs().mean()
     print(f"\nall features, all year: persistence with the last reading {last:.3f}, with today's mean until 18:00 {mean_d0:.3f}")
+    # The choice of the target baseline, fitted again on the validation days: if the
+    # result is not TREND_FACTOR any more, the old data changed and a person must look.
+    validation = validation_days(table)
+    factor, errors = fit_trend_factor(validation)
+    plain = (persistence(validation) - validation[features.LABEL]).abs().mean()
+    ms1 = (trend_adjusted(validation, 1 / 3) - validation[features.LABEL]).abs().mean()
+    print(
+        f"\ntarget baseline, fitted on {len(validation)} validation days "
+        f"({validation.index.min().date()} to {validation.index.max().date()}): "
+        f"persistence {plain:.4f}, factor 1/3 {ms1:.4f}, best factor {factor:+.3f} -> {errors[factor]:.4f} degC; "
+        f"frozen factor {TREND_FACTOR:+.3f}" + ("" if factor == TREND_FACTOR else " <- DIFFERENT, check the data")
+    )
 
 
 # Runs main() only when the file is started as a script, not when it is imported.

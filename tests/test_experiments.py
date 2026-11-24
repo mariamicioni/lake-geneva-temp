@@ -86,8 +86,13 @@ def test_intervals_compare_the_rungs_of_the_ladder(small):
     result = experiments.intervals(rows, test_days, alphas)
     ladder = experiments.ladder(rows, test_days, alphas)
 
-    # Three comparisons, each in the three windows of the README.
-    assert len(result) == 3 * 3
+    # Five comparisons, each in the three windows of the README.
+    assert len(result) == 5 * 3
+    # The model against the target baseline: the same difference as in the ladder.
+    full_vs_target = result.loc[("5 all features - 2 target baseline", "all test days")]
+    assert full_vs_target["diff"] == pytest.approx(
+        ladder.loc["5 Ridge, all features", "test MAE"] - ladder.loc["2 trend-adjusted persistence", "test MAE"]
+    )
     # The difference is the difference of the two MAEs in the ladder (the same days).
     full_vs_water = result.loc[("5 all features - 4 water only", "all test days")]
     expected = ladder.loc["5 Ridge, all features", "test MAE"] - ladder.loc["4 Ridge, water only", "test MAE"]

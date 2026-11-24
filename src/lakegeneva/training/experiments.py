@@ -109,7 +109,8 @@ def ladder(rows: pd.DataFrame, test_days, alphas: dict) -> pd.DataFrame:
     result = {
         # The first three rungs cost nothing: no training at all.
         "1 persistence": scores(rows, baselines.persistence(part), test_days) | {"one fit (ms)": 0.0},
-        "2 trend-adjusted persistence": scores(rows, baselines.trend_adjusted(part), test_days) | {"one fit (ms)": 0.0},
+        # Rung 2 is the target baseline: the trend factor frozen on the validation days.
+        "2 trend-adjusted persistence": scores(rows, baselines.target_baseline(part), test_days) | {"one fit (ms)": 0.0},
         "3 persistence + average change": scores(rows, average_change(rows, test_days), test_days) | {"one fit (ms)": 0.0},
     }
     for rung, name in (("4 Ridge, water only", "water_only"), ("5 Ridge, all features", "full")):
@@ -134,6 +135,7 @@ def intervals(rows: pd.DataFrame, test_days, alphas: dict) -> pd.DataFrame:
     part = rows.loc[test_days]
     forecasts = {
         "1 persistence": baselines.persistence(part),
+        "2 target baseline": baselines.target_baseline(part),
         "3 average change": average_change(rows, test_days),
         "4 water only": train.walk_forward(rows, train.FEATURE_SETS["water_only"], alphas["water_only"], test_days),
         "5 all features": train.walk_forward(rows, train.FEATURES_FULL, alphas["full"], test_days),
@@ -145,10 +147,13 @@ def intervals(rows: pd.DataFrame, test_days, alphas: dict) -> pd.DataFrame:
     # The error of each rung on each test day (°C, without sign). reindex: the same
     # days in the same order for every rung, so the yes/no lists of the windows fit.
     errors = {name: (f.reindex(part.index) - part[features.LABEL]).abs() for name, f in forecasts.items()}
-    # The three comparisons of the README: is row 3 better than persistence (it would
-    # pass the gate without any feature), do the features beat row 3, and does the
-    # weather help on top of the water features?
+    # The comparisons of the README: how far is the model from the target baseline of
+    # the success criterion (row 2) and from plain persistence, is row 3 better than
+    # persistence (it would pass the gate without any feature), do the features beat
+    # row 3, and does the weather help on top of the water features?
     pairs = [
+        ("5 all features", "2 target baseline"),
+        ("5 all features", "1 persistence"),
         ("3 average change", "1 persistence"),
         ("5 all features", "3 average change"),
         ("5 all features", "4 water only"),

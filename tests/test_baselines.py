@@ -23,9 +23,61 @@ def feature_rows(n_days: int, start: str = "2025-10-01", water_last=10.0, trend=
 
 def test_persistence_and_trend_adjusted():
     table = feature_rows(1, water_last=10.0, trend=3.0)
-    # Persistence: the last reading. Trend-adjusted: plus a third of the 3-day trend.
+    # Persistence: the last reading. Trend-adjusted: plus a factor times the 3-day trend.
     assert baselines.persistence(table).iloc[0] == 10.0
-    assert baselines.trend_adjusted(table).iloc[0] == pytest.approx(11.0)
+    assert baselines.trend_adjusted(table, 1 / 3).iloc[0] == pytest.approx(11.0)  # the MS1 factor
+    # Without a factor, and as the target baseline: the frozen factor -0.075.
+    assert baselines.trend_adjusted(table).iloc[0] == pytest.approx(10.0 - 0.075 * 3.0)
+    assert baselines.target_baseline(table).iloc[0] == pytest.approx(10.0 - 0.075 * 3.0)
+
+
+def test_the_frozen_factor_is_one_the_fit_can_find():
+    # TREND_FACTOR was found by fit_trend_factor() on the validation days, so it must
+    # be one of the factors on its grid, and 0 (plain persistence) must be there too.
+    assert baselines.TREND_FACTOR in baselines.TREND_GRID
+    assert 0.0 in baselines.TREND_GRID
+
+
+def test_fit_trend_factor_finds_the_factor_of_the_data():
+    # Tomorrow moves by exactly -0.2 times the 3-day trend: the fit must find -0.2.
+    table = feature_rows(50)
+    table["water_trend_3d"] = np.linspace(-2, 2, 50)
+    table[features.LABEL] = table["water_last"] - 0.2 * table["water_trend_3d"]
+
+    factor, errors = baselines.fit_trend_factor(table)
+
+    assert factor == pytest.approx(-0.2)
+    assert errors[factor] == pytest.approx(0)
+    assert errors.min() == errors[factor]
+
+
+def test_the_validation_days_end_two_days_before_the_test_days():
+    # 30 days from 05.01.2025: 21.01.2025 is the first test day, and the label of
+    # 20.01.2025 is the mean of that test day, so the last validation day is 19.01.
+    table = feature_rows(30, start="2025-01-05")
+    table.loc["2025-01-10", "air_temp_fc_d1"] = np.nan  # a day without all features
+
+    days = baselines.validation_days(table).index
+
+    assert days.min() == pd.Timestamp("2025-01-05")
+    assert days.max() == pd.Timestamp("2025-01-19")
+    assert pd.Timestamp("2025-01-10") not in days
+    assert len(days) == 14
+
+
+def test_the_target_stays_on_the_frozen_baseline_when_persistence_is_better():
+    # 60 October/November test days: persistence is 0.5 off every day (10.0 vs 10.5).
+    # The target baseline is 10 - 0.075 x 0.3 = 9.9775, so 0.5225 off: on THESE days
+    # plain persistence is better. Before, the target then switched to persistence
+    # (MS2 review point B1). Now it stays 20 % below the frozen target baseline.
+    result = baselines.report(feature_rows(60))
+
+    row = result.loc["all features, all year"]
+    assert row["persistence"] == pytest.approx(0.5)
+    assert row["trend_adjusted"] == pytest.approx(0.5225)
+    assert row["persistence"] < row["trend_adjusted"]
+    assert row["target_mae"] == pytest.approx(0.8 * 0.5225)
+    assert "stronger" not in result.columns
 
 
 def test_big_change_days_are_those_with_more_than_0_8_degrees():
@@ -105,17 +157,15 @@ def test_bootstrap_blocks_are_weeks_of_the_calendar_not_rows():
 
 
 def test_report_compares_both_baselines_on_the_same_days():
-    # 60 October/November days: persistence is 0.5 off every day (10.0 vs 10.5),
-    # trend-adjusted 0.4 (10.1 vs 10.5), so here trend-adjusted is the stronger one.
+    # 60 October/November days: persistence 10.0 and the target baseline 9.9775
+    # against a label of 10.5 every day.
     result = baselines.report(feature_rows(60))
 
     row = result.loc["all features, all year"]
     assert row["days"] == 60
     assert row["persistence"] == pytest.approx(0.5)
-    assert row["trend_adjusted"] == pytest.approx(0.4)
-    assert row["stronger"] == "trend-adjusted"
-    # The target is 20 % below the STRONGER baseline: 0.8 x 0.4.
-    assert row["target_mae"] == pytest.approx(0.32)
+    assert row["trend_adjusted"] == pytest.approx(0.5225)
+    assert row["trend_minus_persistence"] == pytest.approx(0.0225)
     # All 60 days are in October-January, and none changes by more than 0.8 °C.
     assert result.loc["all features, Oct-Jan", "days"] == 60
     assert result.loc["all features, change > 0.8", "days"] == 0
@@ -128,6 +178,8 @@ def test_report_counts_only_the_test_days_from_21_01_2025():
 
     assert result.loc["test, all year", "days"] == 10
     assert result.loc["test, all year", "first_day"] == pd.Timestamp("2025-01-21").date()
+    # The validation days, on which the target baseline was chosen, end on 19.01.
+    assert result.loc["validation, all year", "days"] == 9
     # The windows over all days with all features still see all 20 days.
     assert result.loc["all features, all year", "days"] == 20
 
