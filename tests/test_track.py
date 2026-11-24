@@ -1,14 +1,12 @@
 """Tests for the MLflow tracking and the model registry. Everything stays in a temporary folder."""
 # How to run: `uv run pytest` (locally) - CI runs the same on every push.
 # MLflow writes to a small database in tmp_path here, never to DagsHub.
-import json
-
 import mlflow
 import numpy as np
 import pandas as pd
 import pytest
 
-from lakegeneva.common import forecasting  # the shared step from the change to the temperature
+from lakegeneva.common import feature_store, forecasting  # the read path; the shared step from the change to the temperature
 from lakegeneva.common.features import LABEL  # the column with tomorrow's mean (the truth)
 from lakegeneva.training import gate, track, train
 from tests.test_train import fake_rows
@@ -24,6 +22,11 @@ def local_mlflow(tmp_path, monkeypatch):
     mlflow.set_tracking_uri(None)
 
 
+# A proven data version, as after `dvc pull` on GitHub: the DVC list confirms the table
+# and a commit gives it back.
+PROVEN = {"data_md5": "ab12cd.dir", "data_commit": "a" * 40, "data_tag": "none", "data_matches_dvc": "yes"}
+
+
 @pytest.fixture
 def trained(monkeypatch, tmp_path):
     """train.run() on a small fake table across TEST_START, with small settings."""
@@ -35,55 +38,15 @@ def trained(monkeypatch, tmp_path):
     # "Today" for the freshness check G5: the day after the newest row, as in a real run
     # (the fake table is from 2024/2025, so the real today would make it look old).
     monkeypatch.setattr(gate, "today", lambda: (table.index.max() + pd.Timedelta(days=1)).date())
-    # The table as a file, like the feature store, so the run can name its md5.
-    features = tmp_path / "features.parquet"
-    table.to_parquet(features)
-    return train.run(table), train.model_rows(table), features, gate.newest_rows(table)
-
-
-def fake_dvc(tmp_path, content: bytes):
-    """A feature file, a DVC pointer and the DVC list of files of that version."""
-    features = tmp_path / "features.parquet"
-    features.write_bytes(content)
-    pointer = tmp_path / "features.dvc"
-    pointer.write_text("outs:\n- md5: ab12cd.dir\n  path: features\n", encoding="utf-8")
-    cache = tmp_path / "cache"
-    (cache / "ab").mkdir(parents=True)
-    listing = [{"md5": track.file_md5(features), "relpath": "features.parquet"}]
-    (cache / "ab" / "12cd.dir").write_text(json.dumps(listing), encoding="utf-8")
-    return features, pointer, cache
-
-
-def test_data_version_is_claimed_when_the_file_is_the_dvc_version(tmp_path):
-    features, pointer, cache = fake_dvc(tmp_path, b"the stored table")
-
-    version = track.data_version(features, pointer, cache)
-
-    assert version["data_md5"] == "ab12cd.dir"
-    assert version["data_matches_dvc"] == "yes"
-    assert version["features_md5"] == track.file_md5(features)
-
-
-def test_data_version_is_not_claimed_for_another_or_changed_table(tmp_path):
-    features, pointer, cache = fake_dvc(tmp_path, b"the stored table")
-    # The table was changed after DVC stored it (or another table was given).
-    features.write_bytes(b"a changed table")
-
-    version = track.data_version(features, pointer, cache)
-
-    assert version["data_matches_dvc"] == "no"
-    assert version["data_md5"] == "not a DVC version"
-    # The md5 of the file that was really used is still logged.
-    assert version["features_md5"] == track.file_md5(features)
-
-
-def test_data_version_is_unknown_without_the_dvc_list(tmp_path):
-    features, pointer, _ = fake_dvc(tmp_path, b"the stored table")
-
-    version = track.data_version(features, pointer, tmp_path / "empty_cache")
-
-    assert version["data_matches_dvc"] == "unknown"
-    assert version["data_md5"] == "unknown"
+    # The table as a file, read through the feature store like in train.py, so the run
+    # names the md5 of the table it read. tmp_path has no DVC list, so the version
+    # comes out "unknown"; the tests use it as proven, like a run on GitHub after
+    # dvc pull (test_an_unproven_data_version_is_logged_but_not_registered: unknown).
+    path = tmp_path / "features.parquet"
+    table.to_parquet(path)
+    _, data = feature_store.load_features(path=path)
+    data = data | PROVEN
+    return train.run(table), train.model_rows(table), data, gate.newest_rows(table)
 
 
 def two_targets(all_days: float, big_change: float) -> pd.DataFrame:
@@ -122,9 +85,9 @@ def test_flat_metrics_names_every_number_and_skips_empty_ones():
 
 
 def test_a_run_logs_both_models_and_registers_the_full_one(local_mlflow, trained):
-    results, rows, features, newest = trained
+    results, rows, data, newest = trained
 
-    track.track(results, rows, features, newest)
+    track.track(results, rows, data, newest)
 
     runs = mlflow.search_runs(experiment_names=[track.EXPERIMENT])
     assert sorted(runs["tags.mlflow.runName"]) == ["full", "water_only"]
@@ -138,12 +101,29 @@ def test_a_run_logs_both_models_and_registers_the_full_one(local_mlflow, trained
     assert len(versions) == 1
 
 
+def test_an_unproven_data_version_is_logged_but_not_registered(local_mlflow, trained):
+    results, rows, data, newest = trained
+    # The table cannot be matched to a DVC version (no DVC list on this computer).
+    unproven = data | {"data_md5": "unknown", "data_commit": "unknown", "data_tag": "unknown", "data_matches_dvc": "unknown"}
+
+    decision = track.track(results, rows, unproven, newest)
+
+    # Both runs are logged, with the data version as it is ...
+    runs = mlflow.search_runs(experiment_names=[track.EXPERIMENT])
+    assert len(runs) == 2
+    assert set(runs["params.data_matches_dvc"]) == {"unknown"}
+    # ... but no model is registered, so no registered model points to an unknown version.
+    assert local_mlflow.search_model_versions(f"name='{track.MODEL_NAME}'") == []
+    assert decision["version"] is None and not decision["promoted"]
+    assert "data version not proven" in decision["error"]
+
+
 def test_the_champion_is_the_full_model_and_loads_back(local_mlflow, trained):
-    results, rows, features, newest = trained
+    results, rows, data, newest = trained
 
     # The first run: no champion yet, and the fake data is easy to learn, so the full
     # model passes the gate and becomes the champion.
-    decision = track.track(results, rows, features, newest)
+    decision = track.track(results, rows, data, newest)
     assert decision["promoted"], decision
 
     loaded = mlflow.sklearn.load_model(f"models:/{track.MODEL_NAME}@{track.CHAMPION}")
@@ -154,8 +134,8 @@ def test_the_champion_is_the_full_model_and_loads_back(local_mlflow, trained):
 
 
 def test_the_champion_loaded_like_in_ms4_gives_a_temperature_not_a_change(local_mlflow, trained):
-    results, rows, features, newest = trained
-    track.track(results, rows, features, newest)
+    results, rows, data, newest = trained
+    track.track(results, rows, data, newest)
 
     # How the live forecast (MS4) will get its model: by the alias "champion" from the
     # registry. Then the shared function on the newest rows of the feature table.
@@ -182,8 +162,8 @@ def test_the_champion_loaded_like_in_ms4_gives_a_temperature_not_a_change(local_
 
 
 def test_the_registered_model_says_that_its_output_is_a_change(local_mlflow, trained):
-    results, rows, features, newest = trained
-    track.track(results, rows, features, newest)
+    results, rows, data, newest = trained
+    track.track(results, rows, data, newest)
 
     # The signature is what the model page in MLflow shows: the input columns and the
     # output. get_model_info reads it without loading the model.
@@ -198,10 +178,10 @@ def test_the_registered_model_says_that_its_output_is_a_change(local_mlflow, tra
 
 
 def test_the_first_run_skips_the_champion_checks_and_the_second_compares(local_mlflow, trained):
-    results, rows, features, newest = trained
+    results, rows, data, newest = trained
 
-    first = track.track(results, rows, features, newest)
-    second = track.track(results, rows, features, newest)
+    first = track.track(results, rows, data, newest)
+    second = track.track(results, rows, data, newest)
 
     # Version 1: no champion yet, so G2 and G3 are skipped; G1 and G4 ran.
     assert first["checks"]["g2_validation_vs_champion"].startswith("skipped")
@@ -224,13 +204,13 @@ def test_the_first_run_skips_the_champion_checks_and_the_second_compares(local_m
 
 
 def test_a_model_that_fails_the_gate_does_not_take_the_alias(local_mlflow, trained, monkeypatch):
-    results, rows, features, newest = trained
-    track.track(results, rows, features, newest)  # version 1 passes and becomes the champion
+    results, rows, data, newest = trained
+    track.track(results, rows, data, newest)  # version 1 passes and becomes the champion
 
     # The next run fails the shadow check (here: no difference at all is allowed any
     # more, a limit below 0). It is registered as version 2, but the alias stays.
     monkeypatch.setattr(gate, "MAX_SHADOW_DIFFERENCE", -1.0)
-    decision = track.track(results, rows, features, newest)
+    decision = track.track(results, rows, data, newest)
 
     assert not decision["promoted"]
     champion = local_mlflow.get_model_version_by_alias(track.MODEL_NAME, track.CHAMPION)
@@ -241,8 +221,8 @@ def test_a_model_that_fails_the_gate_does_not_take_the_alias(local_mlflow, train
 
 
 def test_a_champion_that_cannot_be_loaded_is_an_error_not_a_pass(local_mlflow, trained, monkeypatch):
-    results, rows, features, newest = trained
-    track.track(results, rows, features, newest)  # version 1 becomes the champion
+    results, rows, data, newest = trained
+    track.track(results, rows, data, newest)  # version 1 becomes the champion
 
     # The champion exists, but it cannot be read (e.g. DagsHub does not answer). This is
     # NOT the same as "no champion": the checks must not be skipped (fail-closed).
@@ -250,7 +230,7 @@ def test_a_champion_that_cannot_be_loaded_is_an_error_not_a_pass(local_mlflow, t
         raise ConnectionError("DagsHub does not answer")
 
     monkeypatch.setattr(track, "champion_info", broken)
-    decision = track.track(results, rows, features, newest)
+    decision = track.track(results, rows, data, newest)
 
     assert not decision["promoted"]
     assert "ConnectionError" in decision["error"]
@@ -260,8 +240,8 @@ def test_a_champion_that_cannot_be_loaded_is_an_error_not_a_pass(local_mlflow, t
 
 
 def test_the_champion_is_loaded_by_the_version_whose_metrics_were_read(local_mlflow, trained, monkeypatch):
-    results, rows, features, newest = trained
-    track.track(results, rows, features, newest)  # version 1 becomes the champion
+    results, rows, data, newest = trained
+    track.track(results, rows, data, newest)  # version 1 becomes the champion
 
     # Remember which model address champion_info() loads.
     loaded = []
@@ -276,9 +256,9 @@ def test_the_champion_is_loaded_by_the_version_whose_metrics_were_read(local_mlf
 
 
 def test_a_rollback_while_the_gate_runs_is_not_undone(local_mlflow, trained, monkeypatch):
-    results, rows, features, newest = trained
-    track.track(results, rows, features, newest)  # version 1: champion
-    track.track(results, rows, features, newest)  # version 2: champion
+    results, rows, data, newest = trained
+    track.track(results, rows, data, newest)  # version 1: champion
+    track.track(results, rows, data, newest)  # version 2: champion
 
     # While the gate of version 3 runs (after its checks against version 2), a person
     # rolls back to version 1 by hand.
@@ -290,7 +270,7 @@ def test_a_rollback_while_the_gate_runs_is_not_undone(local_mlflow, trained, mon
         return checks
 
     monkeypatch.setattr(gate, "run_checks", checks_then_rollback)
-    decision = track.track(results, rows, features, newest)
+    decision = track.track(results, rows, data, newest)
 
     # Version 3 was checked against version 2, not against the champion of now: it must
     # not take the alias, or the retrain would undo the rollback (review of 18.11.2026).
@@ -301,11 +281,11 @@ def test_a_rollback_while_the_gate_runs_is_not_undone(local_mlflow, trained, mon
 
 
 def test_old_labels_stop_the_promotion_but_not_the_logging(local_mlflow, trained, monkeypatch):
-    results, rows, features, newest = trained
+    results, rows, data, newest = trained
     # 60 days later, without any new row: the table stopped growing.
     monkeypatch.setattr(gate, "today", lambda: (newest.index.max() + pd.Timedelta(days=60)).date())
 
-    decision = track.track(results, rows, features, newest)
+    decision = track.track(results, rows, data, newest)
 
     # The run is logged and the version registered (old data can still be evaluated),
     # but it does not become the champion.
@@ -315,10 +295,10 @@ def test_old_labels_stop_the_promotion_but_not_the_logging(local_mlflow, trained
 
 
 def test_a_person_can_promote_a_version_by_hand(local_mlflow, trained, monkeypatch):
-    results, rows, features, newest = trained
-    track.track(results, rows, features, newest)  # version 1: champion
+    results, rows, data, newest = trained
+    track.track(results, rows, data, newest)  # version 1: champion
     monkeypatch.setattr(gate, "MAX_SHADOW_DIFFERENCE", -1.0)
-    track.track(results, rows, features, newest)  # version 2: not promoted by the gate
+    track.track(results, rows, data, newest)  # version 2: not promoted by the gate
 
     # A person checked version 2 and promotes it (when the gate could not decide).
     track.promote_by_hand("2")

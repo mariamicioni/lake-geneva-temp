@@ -58,4 +58,5 @@ Units in the raw files: `water_temp_c` °C, `flow_m3s` m³/s, `temperature_2m` �
 
 ## Versions
 - One Git commit of `data/raw.dvc` and `data/features.dvc` = one data version. The daily job commits them as `github-actions[bot]`; `data-v1` (27.10.2026) is the first tag.
-- Get an older version: `git checkout <commit or tag>`, then `dvc checkout` (or `dvc pull`).
+- Get an older version: `git checkout <commit or tag>`, then `dvc checkout` (or `dvc pull`). Or, without changing the checked-out data: `load_features("<tag or commit>")` in `src/lakegeneva/common/feature_store.py` (it runs `dvc get --rev`), e.g. `train.py --data-version data-v1`.
+- Every MLflow run logs the version it was trained on: `data_md5` (the hash in `data/features.dvc`), `data_commit`, `data_tag` (every data tag whose pointer has the same hash, e.g. `data-v1`; "none" if the version has no tag) and `features_md5` (the md5 of the table that was read). A model is registered only if this version is proven: DVC's list confirms the table, and a commit or tag gives it back.

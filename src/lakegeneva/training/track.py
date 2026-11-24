@@ -25,14 +25,11 @@ it only if it passes the promotion gate (gate.py).
 # functions and not at the top of this file.
 
 import argparse  # reads the command-line option --promote
-import hashlib  # md5 of the feature file that was really used
-import json  # reads the DVC list of files of a data version
-import subprocess  # runs git to find the code and data versions
-from pathlib import Path  # the path of the DVC pointer file
 
 import pandas as pd  # the evaluation tables
 
 from lakegeneva.common import baselines, forecasting  # the frozen trend factor; the name of the model's output (a change)
+from lakegeneva.common.feature_store import git, is_proven  # runs git; is the data version proven?
 from lakegeneva.training import gate  # the four checks that decide about the alias
 
 # The MLflow experiment (a folder of runs) and the registered model.
@@ -40,10 +37,6 @@ EXPERIMENT = "lake-geneva-temp"
 MODEL_NAME = "lake-geneva-temp"
 # The alias of the model that the live forecast will use (MS4).
 CHAMPION = "champion"
-# The DVC pointer of the feature table: its md5 is the version of the training data.
-FEATURES_POINTER = Path("data/features.dvc")
-# Where DVC keeps its list of the files of each data version (default cache of DVC 3).
-DVC_CACHE = Path(".dvc/cache/files/md5")
 # Short metric names for the windows of train.evaluate().
 WINDOW_NAMES = {"test, all year": "test", "test, change > 0.8": "big_change", "test, Oct-Jan": "oct_jan"}
 COLUMN_NAMES = {
@@ -61,14 +54,6 @@ COLUMN_NAMES = {
 }
 
 
-def git(*args: str) -> str:
-    """The output of one git command, or "" if git is not available."""
-    try:
-        return subprocess.check_output(["git", *args], text=True, stderr=subprocess.DEVNULL).strip()
-    except (OSError, subprocess.CalledProcessError):
-        return ""
-
-
 def git_commit() -> str:
     """The commit of the code that trained the model; "-dirty" if a tracked file was changed."""
     commit = git("rev-parse", "HEAD")
@@ -78,40 +63,6 @@ def git_commit() -> str:
     # changed code cannot be repeated from the commit alone, so it gets a mark.
     changed = git("status", "--porcelain", "--untracked-files=no")
     return commit + ("-dirty" if changed else "")
-
-
-def file_md5(path: Path) -> str:
-    """The md5 of a file's bytes (the same number DVC uses for a file)."""
-    return hashlib.md5(Path(path).read_bytes()).hexdigest()
-
-
-def data_version(features: Path, pointer: Path = FEATURES_POINTER, cache: Path = DVC_CACHE) -> dict:
-    """Which data trained the model: the file really used, and its DVC version if it is one."""
-    # Always true: the name and the md5 of the file that was read.
-    features = Path(features)
-    version = {"features_file": features.as_posix(), "features_md5": file_md5(features)}
-    # The DVC version is claimed only if it is proven: the pointer names a list of
-    # files (its line "- md5: <hash>.dir"), DVC keeps that list in its cache, and the
-    # file used must be in that list with the same md5. Otherwise a run with another
-    # table (--features) or a changed local table would name the wrong data version
-    # (found in a review on 14.11.2026).
-    dir_md5 = ""
-    if pointer.exists():
-        for line in pointer.read_text(encoding="utf-8").splitlines():
-            if line.strip().startswith("- md5:"):
-                dir_md5 = line.split(":", 1)[1].strip()
-    listing = cache / dir_md5[:2] / dir_md5[2:] if dir_md5 else None
-    if listing is None or not listing.exists():
-        return version | {"data_md5": "unknown", "data_commit": "unknown", "data_matches_dvc": "unknown"}
-    expected = {entry["relpath"]: entry["md5"] for entry in json.loads(listing.read_text(encoding="utf-8"))}
-    if expected.get(features.name) != version["features_md5"]:
-        return version | {"data_md5": "not a DVC version", "data_commit": "none", "data_matches_dvc": "no"}
-    # `git checkout <data_commit>` and then `dvc checkout` give back exactly this table.
-    data_commit = git("log", "-1", "--format=%H", "--", str(pointer)) or "unknown"
-    # A pointer changed after its last commit is not yet a version anyone can check out.
-    if git("status", "--porcelain", "--", str(pointer)):
-        data_commit = "not committed"
-    return version | {"data_md5": dir_md5, "data_commit": data_commit, "data_matches_dvc": "yes"}
 
 
 def flat_metrics(evaluation: pd.DataFrame) -> dict:
@@ -288,18 +239,20 @@ def decide(version: str, checks: dict, error: str | None, target_met: bool, chec
     return promote, error
 
 
-def track(results: dict, rows: pd.DataFrame, features: Path, newest: pd.DataFrame) -> dict:
+def track(results: dict, rows: pd.DataFrame, data: dict, newest: pd.DataFrame) -> dict:
     """Log both models of train.run(); register the full model and promote it if it passes the gate.
 
     rows: the rows with all features and a label (train.model_rows).
+    data: the data version of the table, from feature_store.load_features().
     newest: the newest rows with all features, also without a label (gate.newest_rows).
     Returns the version, whether it was promoted, and the result of each check.
     """
     import mlflow
 
     mlflow.set_experiment(EXPERIMENT)
-    # features: the table train.py really read (--features), for the data version.
-    versions = {"git_commit": git_commit(), **data_version(features)}
+    # data: the version of the table that train.py really read (feature_store.py), with
+    # the hash in data/features.dvc and the data tag (review point E1).
+    versions = {"git_commit": git_commit(), **data}
     decision = {}
     for name, result in results.items():
         # The validation days of the gate, for both models (logged for comparison).
@@ -308,6 +261,20 @@ def track(results: dict, rows: pd.DataFrame, features: Path, newest: pd.DataFram
         # Only the full model is a candidate for the live forecast; the water-only model
         # is logged for the comparison (review point B2).
         if name != "full":
+            continue
+        # Registered only on a proven data version: the DVC list confirms the table and
+        # a commit or tag gives it back. Otherwise the model would point to no data
+        # version (review point E1; registered with "unknown" in a review on 24.11.2026).
+        # The runs above stay logged, so the numbers can still be compared.
+        if not is_proven(versions):
+            reason = (
+                f"data version not proven (DVC match: {versions['data_matches_dvc']}, "
+                f"commit: {versions['data_commit']}, tag: {versions['data_tag']}). For the checked-out table: "
+                f"commit the pointer and run dvc pull. For an older version (--data-version): its DVC file list "
+                f"is not on this computer, so it can be trained on and logged, but not registered"
+            )
+            decision = {"version": None, "promoted": False, "checks": {}, "error": reason}
+            print(f"NOT registered: {reason}")
             continue
         version = register(model_uri)
         checks, error, checked_against = {}, None, None
@@ -331,7 +298,10 @@ def track(results: dict, rows: pd.DataFrame, features: Path, newest: pd.DataFram
             print(f"  {check}: {text}")
         if error:
             print(f"  gate error: {error}")
-    print(f"data: {versions['features_file']} (md5 {versions['features_md5'][:8]}), DVC version: {versions['data_matches_dvc']}")
+    print(
+        f"data: {versions['features_file']} (md5 {versions['features_md5'][:8]}), DVC version: "
+        f"{versions['data_matches_dvc']}, tag: {versions['data_tag']}, commit: {versions['data_commit'][:7]}"
+    )
     print(f"runs logged to {mlflow.get_tracking_uri()}")
     return decision
 

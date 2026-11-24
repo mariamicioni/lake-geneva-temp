@@ -30,7 +30,7 @@ from sklearn.preprocessing import StandardScaler  # every feature to mean 0, spr
 
 # The shared definitions: the baselines, the features, and the step from the model's
 # answer (a change) to the forecast (a temperature).
-from lakegeneva.common import baselines, features, forecasting
+from lakegeneva.common import baselines, feature_store, features, forecasting
 
 # --- Settings -----------------------------------------------------------------
 # The two models: all ten features, and only the five water features (review point
@@ -280,14 +280,22 @@ def main() -> None:
     # Command-line options; __doc__ (the text at the top) becomes the --help text.
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument(
-        "--features", default="data/features/features.parquet", help="the feature table (the feature store)"
+        "--features", default="data/features/features.parquet", help="the checked-out feature table (after dvc pull)"
+    )
+    parser.add_argument(
+        "--data-version", metavar="TAG_OR_COMMIT", help="train on an older data version, e.g. data-v1 (needs the bucket key)"
     )
     parser.add_argument("--no-mlflow", action="store_true", help="train and test only, log nothing")
     args = parser.parse_args()
 
     # The training pipeline reads the stored table, not the raw files: the feature
-    # store is the only way data reaches the model.
-    table = pd.read_parquet(args.features)
+    # store is the only way data reaches the model, and load_features() also says
+    # which data version it is (review point E1).
+    table, data = feature_store.load_features(args.data_version, args.features)
+    print(
+        f"data version: {data['data_requested']}, tag {data['data_tag']}, DVC hash {data['data_md5']}, "
+        f"proven by DVC: {data['data_matches_dvc']}"
+    )
     results = run(table)
     for name, result in results.items():
         print(f"\n=== {name}: alpha {result['alpha']} (validation MAE per alpha, degC: "
@@ -308,10 +316,13 @@ def main() -> None:
         # model_rows: the rows with a label, for training and the validation checks.
         # newest_rows: the newest days with all features, also without a label yet:
         # the days of the live forecast, for the shadow and plausibility checks.
-        decision = track.track(results, model_rows(table), args.features, gate.newest_rows(table))
+        decision = track.track(results, model_rows(table), data, gate.newest_rows(table))
         # A version that did not pass the gate turns the run red (exit code 1), so GitHub
         # sends an email and a person looks at it. The version stays registered with its
-        # tags, and the champion stays the same.
+        # tags, and the champion stays the same. A model on an unproven data version is
+        # not registered at all, and the run is red too (track.py).
+        if decision.get("version") is None:
+            raise SystemExit(f"No model was registered: {decision.get('error')}.")
         if not decision.get("promoted"):
             raise SystemExit(f"The gate did not promote version {decision.get('version')}: see its gate tags in MLflow.")
 

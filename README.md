@@ -63,11 +63,11 @@ The rules that prevent leakage: every day is a Swiss calendar day (with summer t
 
 ## The training pipeline
 Every Monday (`.github/workflows/retrain.yml`, 06:00 UTC), or by hand:
-1. `dvc pull data/features.dvc` gets the newest feature table from the bucket. Training never reads the raw files.
+1. `dvc pull data/features.dvc` gets the newest feature table from the bucket. Training never reads the raw files. It reads the table only through `load_features()` in `src/lakegeneva/common/feature_store.py`, the one read path that the live forecast will also use in MS4.
 2. `check_fresh.py` stops the job if the newest row with all features is more than 2 days old, so an old table is never trained on or registered.
 3. `train.py` chooses the one setting of the model on the validation year. Then it tests the model day by day: for each test day a new model is trained only on the earlier days whose label was known at 18:00 (walk-forward).
 4. The model for the live forecast is trained on all days with a known label.
-5. `track.py` logs the run to MLflow on DagsHub: the git commit, the data version, the settings, the test results and the model. The full model is registered as a new version of `lake-geneva-temp`.
+5. `track.py` logs the run to MLflow on DagsHub: the git commit, the data version, the settings, the test results and the model. The data version is the hash in `data/features.dvc` (`data_md5`), the commit that stored it (`data_commit`), its data tag if it has one (`data_tag`), and the md5 of the table that was really read. The DVC version is claimed only if that md5 is in DVC's list of the version, and a model is registered only on such a proven version (otherwise the runs are logged, but nothing is registered and the run is red). So every registered model points to exactly one data version. The full model is registered as a new version of `lake-geneva-temp`.
 6. The alias `champion` (the model that the live forecast will load in MS4) moves to the new version only if it passes the gate (`gate.py`). The gate reads no label of a test day: the test days are only for reporting. It checks the version as it was loaded back from MLflow, in five steps:
    - **G1:** on the validation days, the training procedure has a lower MAE than persistence and than row 3 of the table below.
    - **G2:** its validation MAE is at most 0.005 °C above the champion's, on exactly the same validation days and labels (an md5 fingerprint of them is logged with every run).
@@ -98,7 +98,7 @@ What the numbers say:
 - **Retraining every week is enough.** A new model every day, every week or every month gives 0.437 °C. A model trained only once is worse on the big-change days (1.645 °C).
 - **The fresher forecast is not better.** With the 06:00 UTC run of the same day instead of the 48-hour-old forecast, the error is 0.438 against 0.440 °C on the 655 test days on which both exist. So the features stay as they are.
 
-Where to look: the runs and the registered model are public in the [MLflow pages on DagsHub](https://dagshub.com/mariamicioni/lake-geneva-temp.mlflow/) (no login needed). Every run names its git commit and its data version. With these two, `train.py` gives the same numbers again: checked on 14.11.2026 in a fresh clone for a run made on GitHub, where all 33 logged numbers were equal to 13 decimal places. The version tag `target_20_percent` says whether both targets are met; `champion` only means that the gate was passed (or, tag `gate`: "promoted by hand", that a person checked it). One training run on GitHub takes about 1.5 minutes.
+Where to look: the runs and the registered model are public in the [MLflow pages on DagsHub](https://dagshub.com/mariamicioni/lake-geneva-temp.mlflow/) (no login needed). Every run names its git commit and its data version. With these two, `train.py` gives the same numbers again: `git checkout <git_commit>`, fetch the table with `dvc get . data/features/features.parquet --rev <data_commit> -o table.parquet`, then `train.py --features table.parquet --no-mlflow` (with the code from 24.11.2026 on, `train.py --data-version <data_commit> --no-mlflow` does the fetch itself; one tag from `data_tag` works instead of the commit). This needs a data version that can be got back: a commit in `data_commit`, or a tag in `data_tag`. Every registered model has one (runs from 24.11.2026 on); a run that was only logged can say `unknown` or `not committed`, and then it cannot be repeated. A `git_commit` that ends in `-dirty` means that some file in Git was changed (even only the README), so exact repetition is not guaranteed; GitHub's runs are never dirty. `data_commit` is the newest commit that stores the same pointer; in a shallow clone (`--depth 1`) that can be a later commit than the evening that made the data, with the same table. This was checked on 14.11.2026 in a fresh clone for a run made on GitHub, where all 33 logged numbers were equal to 13 decimal places. The version tag `target_20_percent` says whether both targets are met; `champion` only means that the gate was passed (or, tag `gate`: "promoted by hand", that a person checked it). One training run on GitHub takes about 1.5 minutes.
 
 ## Where the data lives
 Data and models are never stored in Git; Git only holds code, configuration and small DVC pointer files. The only exception is a 4-day test sample of real BAFU readings in `tests/fixtures/` (22 KB), so that CI can test the feature code without the data.
@@ -142,6 +142,7 @@ Then, or after `dvc pull`:
 ```bash
 uv run python src/lakegeneva/training/train.py --no-mlflow   # train and test day by day, log nothing (about 1 minute)
 uv run python src/lakegeneva/training/train.py               # the same, logged to a local mlflow.db and mlruns/ (not in Git)
+uv run python src/lakegeneva/training/train.py --data-version data-v1 --no-mlflow   # on an older data version: a data tag or a commit (needs the bucket key and DVC, like dvc pull)
 uv run mlflow ui                                             # the local runs and models, at http://localhost:5000
 uv run python src/lakegeneva/training/experiments.py         # the table of results above and the three experiments (about 2 minutes)
 uv run --env-file .env python src/lakegeneva/training/train.py   # only with a DagsHub token in .env: log to DagsHub and register
@@ -175,7 +176,7 @@ src/lakegeneva/
   features/    feature pipeline (ingest, backfill, build the table)
   training/    training pipeline (read the feature table, train, test walk-forward, log and register with MLflow, promotion gate)
   inference/   inference pipeline, empty until MS4 (load model, predict, serve)
-  common/      shared code: feature definition, baselines, forecast from the model's change, names of the raw files, weather location
+  common/      shared code: feature definition, the read path of the feature table (feature store), baselines, forecast from the model's change, names of the raw files, weather location
 tests/         unit tests (run in CI); fixtures/ holds the small test sample
 data/          raw/ and features/ (not in Git: DVC pointer files raw.dvc, features.dvc)
 .github/workflows/  ci.yml (tests + image), feature-pipeline.yml (daily), retrain.yml (weekly), promote.yml (by hand)
@@ -209,6 +210,7 @@ I build this project on what the MLOps HS26 course teaches. When a file follows 
 | `src/lakegeneva/features/run_pipeline.py` | The steps of the daily job (`feature-pipeline.yml`); "no shell tricks" from the Block 3 exercise [12] | Written for this project |
 | `.dvc/config`, `data/raw.dvc`, `data/features.dvc` | Block 1 exercise, Part A (version the data with DVC) [5] | Google Cloud Storage instead of the local S3 bucket; the key path only in `.dvc/config.local` (not in Git) |
 | `src/lakegeneva/common/baselines.py` | Trend-adjusted persistence and bootstrap interval suggested in the MS1 reviews (A1, A2/B2); its factor fitted and frozen on the validation days as asked in the MS2 reviews (B1); moving-block bootstrap [8] | Written for this project |
+| `src/lakegeneva/common/feature_store.py` | MS2 review point E1 (also A1): one read function for the feature table that names its data version; `dvc get --rev` from the DVC command reference [15] | Written for this project; the check of the data version moved here from `track.py` |
 | `src/lakegeneva/common/forecasting.py` | A review of this repository found that "last reading + change" existed only inside the walk-forward test, so the live forecast would have had to repeat it by hand (training-serving skew) | Written for this project |
 | `src/lakegeneva/training/train.py` | Ridge regression and scaling from the scikit-learn documentation [13]; walk-forward test as planned in the MS2 summary (review points A1, B2) | Written for this project |
 | `src/lakegeneva/training/experiments.py` | SW09 lecture, "Your pipeline": baseline ladder, how much data, how often to retrain [14] | Own experiments on this project's data; the lecture's scripts are not used |
@@ -233,3 +235,4 @@ I build this project on what the MLOps HS26 course teaches. When a file follows 
 [12] Bär, Florian (2026). Course project, Block 3: scrape the data (exercise_quotes_3_scrape), Dockerfile. MLOps HS26, Lucerne University of Applied Sciences and Arts.
 [13] scikit-learn developers (2026). scikit-learn documentation, version 1.9: Ridge, StandardScaler, Pipeline. accessed on 14.11.2026 from scikit-learn.org/stable
 [14] Bravin, Marc (2026). Efficiency Techniques, MLOps HS26 SW09, lecture slides. Lucerne University of Applied Sciences and Arts.
+[15] DVC (2026). Command reference: dvc get, version 3.67.1 (`dvc get --help`). checked on 24.11.2026

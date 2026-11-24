@@ -18,9 +18,9 @@ import argparse  # reads the command-line option --table
 import datetime as dt  # today's date
 from zoneinfo import ZoneInfo  # the Swiss clock
 
-import pandas as pd  # reads the Parquet table
+import pandas as pd  # the type of the table (feature_store.py reads it)
 
-from lakegeneva.common import features  # the list of features and the time zone
+from lakegeneva.common import feature_store, features  # the list of features and the time zone; the read path
 
 # The newest row with all features may be at most this many days old.
 MAX_AGE_DAYS = 2
@@ -42,7 +42,9 @@ def main() -> None:
     args = parser.parse_args()
 
     today = dt.datetime.now(ZoneInfo(features.TIMEZONE)).date()
-    age = age_in_days(pd.read_parquet(args.table), today)
+    # The one read path of the feature table (feature_store.py, review point E1).
+    table, _ = feature_store.load_features(path=args.table)
+    age = age_in_days(table, today)
     # SystemExit with a text: Python prints it and the exit code says that the run failed.
     if age is None:
         raise SystemExit(f"{args.table} has no row with all features.")

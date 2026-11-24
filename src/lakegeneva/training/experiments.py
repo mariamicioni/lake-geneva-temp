@@ -27,7 +27,7 @@ import time  # perf_counter() measures how long training takes
 import numpy as np  # median of the measured times; np.ones for the "all test days" window
 import pandas as pd  # the daily feature table
 
-from lakegeneva.common import baselines, features  # the baselines and column names
+from lakegeneva.common import baselines, feature_store, features  # the baselines and column names; the read path
 from lakegeneva.training import train  # the model and the walk-forward test
 
 # The training windows of question 2, in days (None: all earlier rows). Not shorter
@@ -221,14 +221,23 @@ def main() -> None:
     # Command-line options; __doc__ (the text at the top) becomes the --help text.
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument(
-        "--features", default="data/features/features.parquet", help="the feature table (the feature store)"
+        "--features", default="data/features/features.parquet", help="the checked-out feature table (after dvc pull)"
+    )
+    parser.add_argument(
+        "--data-version", metavar="TAG_OR_COMMIT", help="use an older data version, e.g. data-v1 (needs the bucket key)"
     )
     # Question 4 needs the raw files of the 06:00 UTC runs: they are not in the feature
     # store, because the model does not use them (yet).
     parser.add_argument("--raw", default="data/raw", help="folder with the raw files")
     args = parser.parse_args()
 
-    rows = train.model_rows(pd.read_parquet(args.features))
+    # The same read path as train.py (feature_store.py, review point E1).
+    table, data = feature_store.load_features(args.data_version, args.features)
+    print(
+        f"data version: {data['data_requested']}, tag {data['data_tag']}, DVC hash {data['data_md5']}, "
+        f"proven by DVC: {data['data_matches_dvc']}"
+    )
+    rows = train.model_rows(table)
     test_days = rows.index[rows.index >= baselines.TEST_START]
     # The setting of each model, chosen on the validation year only (as in train.py).
     alphas = {name: train.choose_alpha(rows, columns)[0] for name, columns in train.FEATURE_SETS.items()}
