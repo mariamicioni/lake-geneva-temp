@@ -22,6 +22,7 @@ and `git checkout data-YYYY-MM-DD` give back exactly that version.
 
 import argparse  # reads the issue day and the expected pointer from the command line
 import datetime as dt  # checks that the day is a real date
+import subprocess  # runs git tag, to show Git's message if it fails
 
 from lakegeneva.common.feature_store import FEATURES_POINTER, git, pointer_md5
 
@@ -55,10 +56,18 @@ def tag(day: dt.date, expected: str, commit: str = "HEAD") -> str:
         # The tag exists. Same version (e.g. the same run again): nothing to do. Another
         # version: the tag stays where it is, it never moves.
         return "exists" if stored_pointer(f"refs/tags/{name}") == expected else "kept"
-    # An annotated tag (like data-v1), with the day in its message, on the fixed SHA.
-    git("tag", "-a", name, "-m", f"data version for issue day {day:%d.%m.%Y}", sha)
-    if git("rev-parse", "--verify", "--quiet", f"refs/tags/{name}^{{commit}}") != sha:
-        raise SystemExit(f"Could not create the tag {name} on {sha[:7]}.")
+    # An annotated tag (like data-v1), with the day in its message, on the fixed SHA. Run
+    # directly, not with git(), so that Git's own reason is shown if it fails (e.g. no
+    # user.name and user.email for the tagger: the daily job sets them before this step).
+    result = subprocess.run(
+        ["git", "tag", "-a", name, "-m", f"data version for issue day {day:%d.%m.%Y}", sha],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+    if result.returncode != 0 or git("rev-parse", "--verify", "--quiet", f"refs/tags/{name}^{{commit}}") != sha:
+        raise SystemExit(f"Could not create the tag {name} on {sha[:7]}: {result.stderr.strip()}")
     return "created"
 
 

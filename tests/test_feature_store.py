@@ -78,6 +78,11 @@ def repo(tmp_path, monkeypatch):
     """
     monkeypatch.chdir(tmp_path)
     run_git("init", "-q")
+    # A name and email in the repository itself, like the daily job sets them: Git needs
+    # them for commits and annotated tags, and CI has no global ones (found on 25.11.2026:
+    # the tag tests passed on the laptop with its own Git name, but failed on GitHub).
+    run_git("config", "user.name", "test")
+    run_git("config", "user.email", "test@example.com")
     table_bytes = parquet_bytes(TABLE_A)
     dir_md5, listing = dvc_list(hashlib.md5(table_bytes).hexdigest())
     (tmp_path / "data").mkdir()
