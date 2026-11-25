@@ -41,12 +41,14 @@ TAG_PATTERN = "data-*"
 # What git_available() is false for: no git on this computer, or no Git repository here.
 NO_GIT = "unknown"
 # The only form of data/features.dvc that is accepted (see pointer_md5): the six lines
-# DVC 3 writes for one output folder "features", one pattern per line.
+# DVC 3 writes for one output folder "features", one pattern per line. [0-9], not \d:
+# in Python \d also matches digits of other scripts (e.g. the full-width "１"), which
+# DVC does not accept (review of 25.11.2026).
 POINTER_FORM = (
     re.compile(r"outs:"),
     re.compile(r"- md5: ([0-9a-f]{32}\.dir)"),
-    re.compile(r"  size: \d+"),
-    re.compile(r"  nfiles: \d+"),
+    re.compile(r"  size: [0-9]+"),
+    re.compile(r"  nfiles: [0-9]+"),
     re.compile(r"  hash: md5"),
     re.compile(r"  path: features"),
 )
@@ -201,7 +203,9 @@ def data_version(features: Path, md5: str | None = None, pointer: Path = FEATURE
         data_commit = NO_GIT
     else:
         data_commit = git("log", "-1", "--format=%H", "--", pointer.as_posix())
-        if not data_commit or pointer_md5(git("show", f"{data_commit}:{pointer.as_posix()}")) != dir_md5:
+        # strip=False: the pointer exactly as stored; trimming would turn e.g.
+        # "features" + a no-break space into "features" (review of 25.11.2026).
+        if not data_commit or pointer_md5(git("show", f"{data_commit}:{pointer.as_posix()}", strip=False)) != dir_md5:
             # Not (yet) a commit anyone can check out. Its tags still count: a tag with
             # the same hash gives back exactly this table.
             data_commit = "not committed"
@@ -242,7 +246,7 @@ def load_features(version: str | None = None, path: Path | str = FEATURES_FILE) 
         raise ValueError(f"Unknown data version {version!r}: give a tag such as data-v1 or a commit.")
     # The version is the pointer as it was at that commit, stored by the newest commit
     # up to there that changed the pointer.
-    dir_md5 = pointer_md5(git("show", f"{commit}:{FEATURES_POINTER.as_posix()}"))
+    dir_md5 = pointer_md5(git("show", f"{commit}:{FEATURES_POINTER.as_posix()}", strip=False))
     if not dir_md5:
         raise ValueError(f"Data version {version!r} has no feature table (no {FEATURES_POINTER} at {commit[:7]}).")
     data_commit = git("log", "-1", "--format=%H", commit, "--", FEATURES_POINTER.as_posix())

@@ -440,8 +440,29 @@ def test_only_the_exact_form_dvc_writes_is_accepted():
         pointer_text(dir_md5) + "  cache: false\n",
         pointer_text(dir_md5, path="archive"),
         pointer_text(dir_md5) + pointer_text(dir_md5).replace("outs:\n", ""),
+        # A full-width digit is a digit for Python's \d, but not for DVC (review of 25.11.2026).
+        pointer_text(dir_md5).replace("nfiles: 1", "nfiles: １"),
     ):
         assert feature_store.pointer_md5(other_form) == ""
+
+
+def test_a_stored_pointer_is_read_exactly_as_stored(repo, monkeypatch):
+    # A commit stores the pointer with a no-break space after "features": another folder
+    # name for DVC. Trimming Git's output would make it look like the real pointer.
+    repo.pointer.write_text(pointer_text(repo.dir).replace("path: features", "path: features "), encoding="utf-8")
+    run_git("commit", "-q", "-am", "a pointer with another folder name")
+    monkeypatch.setattr(feature_store, "fetch", lambda commit, out: write_table(out, repo.table_bytes))
+
+    # Asked for by name, that commit has no feature table ...
+    with pytest.raises(ValueError, match="has no feature table"):
+        feature_store.load_features("HEAD")
+
+    # ... and the checked-out table A (real pointer, not committed) is not given that commit.
+    repo.pointer.write_text(pointer_text(repo.dir), encoding="utf-8")
+    check_out_table_a(repo)
+    _, data = feature_store.load_features()
+    assert data["data_commit"] == "not committed"
+    assert data["data_tag"] == "data-2026-11-24"
 
 
 def test_the_real_pointer_of_this_repository_is_accepted():
