@@ -106,3 +106,25 @@ def test_only_the_main_branch_publishes_data_and_pushes():
     # commits to main (found in a review on 18.11.2026).
     condition = next(line for line in step.splitlines() if line.strip().startswith("if:"))
     assert "github.ref == 'refs/heads/main'" in condition
+
+
+def test_the_data_version_is_named_and_tagged_after_its_issue_day():
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    step = workflow[workflow.index("- name: Store the new data version") :]
+    step = step[: step.index("- name:", 1)]  # up to the next step
+    # The issue day comes from the build step (build_features.py), not from the clock of
+    # the run (review point A1: GitHub often commits after midnight).
+    assert "ISSUE_DAY: ${{ steps.build.outputs.issue_day }}" in step
+    assert 'git commit -m "chore(data): daily update ${ISSUE_DAY' in step
+    assert "date +" not in step
+    # The pointer this run built is read before the rebase, the tag is made on the commit
+    # to publish (checked against it), and main and the tag are pushed together
+    # atomically: both or neither (review of 25.11.2026; the push itself is tested in
+    # test_tag_data.py with a remote that refuses the tag).
+    built = step.index("BUILT=$(git show HEAD:data/features.dvc")
+    rebase = step.index("git pull --rebase origin main")
+    tag = step.index('lakegeneva.features.tag_data "$ISSUE_DAY" --expect "$BUILT" --commit HEAD')
+    push = step.index('git push --atomic origin HEAD:main "refs/tags/data-$ISSUE_DAY"')
+    assert built < rebase < tag < push
+    # No separate tag push that could fail after main was already pushed.
+    assert 'git push origin "refs/tags/' not in step

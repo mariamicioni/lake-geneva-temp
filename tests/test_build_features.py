@@ -60,3 +60,19 @@ def test_the_command_line_saves_the_table_and_reports_it(tmp_path, monkeypatch, 
     # The log line of the daily job names the size of the table.
     days = len(pd.read_parquet(out))
     assert f"Saved {days} days" in capsys.readouterr().out
+
+
+def test_the_issue_day_is_printed_and_handed_to_the_workflow(tmp_path, monkeypatch, capsys):
+    raw = make_raw_folder(tmp_path)
+    out = tmp_path / "table.parquet"
+    github_output = tmp_path / "github_output"  # the file GitHub names in GITHUB_OUTPUT
+    monkeypatch.setattr(sys, "argv", ["build_features", "--raw", str(raw), "--out", str(out)])
+    monkeypatch.setenv("GITHUB_OUTPUT", str(github_output))
+
+    build_features.main()
+
+    # D is computed from the saved table with the shared rule (review point A1) ...
+    day = features.issue_day(pd.read_parquet(out))
+    assert f"issue day D: {day:%Y-%m-%d}" in capsys.readouterr().out
+    # ... and handed to the workflow as steps.build.outputs.issue_day.
+    assert github_output.read_text(encoding="utf-8") == f"issue_day={day:%Y-%m-%d}\n"

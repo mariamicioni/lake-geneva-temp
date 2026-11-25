@@ -116,8 +116,15 @@ jobs:
       #    another branch would put that branch's commits on main with `git push
       #    origin HEAD:main` (found in a review on 18.11.2026; it never happened).
       #    Such a run still downloads, builds and checks, it just publishes nothing.
+      #    The version is named after its issue day D (review point A1), which step 8
+      #    computed from the data: the newest day whose readings before 18:00 are
+      #    complete. Not the date of the run: GitHub often commits after midnight.
+      #    The commit gets the tag data-D (tag_data.py), pushed together with it,
+      #    unless an earlier version already has that tag: tags never move.
       - name: Store the new data version
         if: always() && steps.build.outcome == 'success' && github.ref == 'refs/heads/main'
+        env:
+          ISSUE_DAY: ${{ steps.build.outputs.issue_day }}
         run: |
           dvc add data/raw data/features
           dvc push
@@ -128,10 +135,22 @@ jobs:
           if git diff --cached --quiet; then
             echo "No new data, nothing to commit"
           else
-            git commit -m "chore(data): daily update $(TZ=Europe/Zurich date +%Y-%m-%d)"
+            git commit -m "chore(data): daily update ${ISSUE_DAY:-without a complete day}"
+            # The data version this run built, read BEFORE the rebase: after it, the
+            # commit to publish must still store exactly this pointer (tag_data.py).
+            BUILT=$(git show HEAD:data/features.dvc | sed -n 's/^- md5: //p')
             # If I pushed a commit while the job ran, put this one on top of it.
             git pull --rebase origin main
-            git push origin HEAD:main
+            if [ -n "$ISSUE_DAY" ]; then
+              # The tag is made locally on the commit to publish (it stops the step if
+              # that commit does not store BUILT), then main and the tag are pushed
+              # together: --atomic means both or neither, so a refused tag can never
+              # leave a pushed version without its tag (review of 25.11.2026).
+              uv run --locked --no-dev python -m lakegeneva.features.tag_data "$ISSUE_DAY" --expect "$BUILT" --commit HEAD
+              git push --atomic origin HEAD:main "refs/tags/data-$ISSUE_DAY"
+            else
+              git push origin HEAD:main
+            fi
           fi
 
       # 10. A source can keep sending old data without any error, and then all steps

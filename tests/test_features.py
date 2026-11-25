@@ -457,6 +457,20 @@ def test_load_weather_undoes_the_open_meteo_shift_of_old_files(tmp_path):
     assert hours["time_local"].iloc[0] == pd.Timestamp("2025-07-01 13:00", tz="Europe/Zurich")
 
 
+def test_the_issue_day_is_the_newest_day_with_complete_readings_before_18():
+    days = pd.date_range("2026-11-21", periods=4, freq="D", name="date")
+    # 23.11 has only 84 of 108 readings before 18:00 (BAFU late); 24.11 has 12 (the job
+    # ran shortly after midnight). The newest complete day is 22.11.
+    table = pd.DataFrame({"n_readings_d0": [108, 102, 84, 12]}, index=days)
+
+    assert features.issue_day(table) == pd.Timestamp("2026-11-22")
+    # Exactly 90 readings is complete (the rule is "at least 90").
+    table.loc["2026-11-24", "n_readings_d0"] = features.MIN_READINGS_D0
+    assert features.issue_day(table) == pd.Timestamp("2026-11-24")
+    # No complete day at all: no issue day.
+    assert features.issue_day(table.assign(n_readings_d0=0)) is None
+
+
 def test_feature_table_has_all_features_and_the_label(tmp_path):
     # One raw folder with the real water sample and a fake forecast for the same days.
     (tmp_path / "water_2606_sample.csv").write_text((FIXTURES / "water_2606_sample.csv").read_text())

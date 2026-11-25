@@ -333,6 +333,17 @@ def feature_table(raw_dir: Path | str = "data/raw") -> pd.DataFrame:
     return table[["n_readings_d0", *FEATURES, "n_readings_d1", LABEL]]
 
 
+def issue_day(table: pd.DataFrame) -> pd.Timestamp | None:
+    """The issue day D of a feature table: the newest day whose readings before 18:00 are complete."""
+    # Complete = the rule of the water features: at least 90 of the 108 readings before
+    # 18:00 (MIN_READINGS_D0). The newest row is often not complete yet when the job
+    # runs (BAFU publishes late), so D is often the day before; it never depends on the
+    # clock of the run (MS2 review point A1: the dates came from the commit time, and
+    # GitHub often commits after midnight). None if no day is complete.
+    complete = table.index[table["n_readings_d0"] >= MIN_READINGS_D0]
+    return complete.max() if len(complete) else None
+
+
 def main() -> None:
     # Build the full table from all raw files and show the last days. The next
     # step saves it as Parquet (the feature store) instead of printing it.

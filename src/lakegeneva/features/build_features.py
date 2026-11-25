@@ -15,6 +15,7 @@ This file is the feature store. DVC versions it and keeps it in the GCS bucket.
 # data or from the feature definition.
 
 import argparse  # reads the command-line options --raw and --out
+import os  # GITHUB_OUTPUT: where a GitHub step writes its values
 from pathlib import Path  # file paths that work on Windows and Linux
 
 import pandas as pd  # writes the table as Parquet (with pyarrow)
@@ -47,6 +48,17 @@ def main() -> None:
         f"Saved {len(table)} days ({table.index.min():%d.%m.%Y} to {table.index.max():%d.%m.%Y}) "
         f"to {args.out}; {int(complete.sum())} days have all features and a label"
     )
+    # The issue day D of this data version (review point A1): the daily job names the
+    # data version after it (commit message and tag data-YYYY-MM-DD), not after the
+    # time of the run.
+    day = features.issue_day(table)
+    print(f"issue day D: {day:%Y-%m-%d}" if day is not None else "issue day D: none (no complete day)")
+    # On GitHub, GITHUB_OUTPUT names a file for the values of a step: the line
+    # issue_day=YYYY-MM-DD becomes steps.build.outputs.issue_day in the workflow.
+    output = os.environ.get("GITHUB_OUTPUT")
+    if output:
+        with open(output, "a", encoding="utf-8") as file:
+            file.write(f"issue_day={day:%Y-%m-%d}\n" if day is not None else "issue_day=\n")
 
 
 # Runs main() only when the file is started as a script, not when it is imported
