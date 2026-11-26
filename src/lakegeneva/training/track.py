@@ -241,12 +241,12 @@ def decide(version: str, checks: dict, error: str | None, target_met: bool, chec
     return promote, error
 
 
-def track(results: dict, rows: pd.DataFrame, data: dict, newest: pd.DataFrame) -> dict:
+def track(results: dict, rows: pd.DataFrame, data: dict, table: pd.DataFrame) -> dict:
     """Log both models of train.run(); register the full model and promote it if it passes the gate.
 
     rows: the rows with all features and a label (train.model_rows).
     data: the data version of the table, from feature_store.load_features().
-    newest: the newest rows with all features, also without a label (gate.newest_rows).
+    table: the whole feature table, for the checks on the newest days and the issue day.
     Returns the version, whether it was promoted, and the result of each check.
     """
     import mlflow
@@ -287,7 +287,7 @@ def track(results: dict, rows: pd.DataFrame, data: dict, newest: pd.DataFrame) -
             champion = champion_info()
             checked_against = champion["version"] if champion else None
             # rows.index.max(): the newest row with a label, for the freshness check G5.
-            checks = gate.run_checks(summary, candidate, champion, newest, rows.index.max())
+            checks = gate.run_checks(summary, candidate, champion, table, rows.index.max())
         except Exception as problem:
             # On purpose ANY problem: fail-closed, a check that could not run must never
             # count as passed.

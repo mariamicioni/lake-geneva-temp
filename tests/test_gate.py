@@ -228,19 +228,35 @@ def test_g4_rejects_a_change_bigger_than_ever_before_the_test_period():
 # --- G5: fresh data -------------------------------------------------------------------
 
 
-def test_g5_needs_fresh_features_and_a_fresh_label():
-    newest = pd.DataFrame({"water_last": [10.0, 10.1]}, index=pd.to_datetime(["2026-11-15", "2026-11-16"]))
-    monday = dt.date(2026, 11, 16)
+def test_g5_needs_the_row_of_the_issue_day_and_a_fresh_label():
+    # A table up to Sunday 15.11.2026, all features, 108 readings before 18:00 each day.
+    days = pd.date_range(end="2026-11-15", periods=3, freq="D", name="date")
+    table = pd.DataFrame(1.0, index=days, columns=features.FEATURES)
+    table["n_readings_d0"] = 108
+    monday = dt.datetime(2026, 11, 16, 6, 0, tzinfo=dt.timezone.utc)  # retrain.yml: S is Sunday
+    friday = pd.Timestamp("2026-11-13")
 
-    # A normal Monday morning: features of Sunday (0-1 days), newest label Friday (3 days).
-    assert gate.check_fresh_data(pd.Timestamp("2026-11-13"), newest, monday)[0]
+    # A normal Monday morning: D is Sunday, the newest label Friday's (3 days).
+    passed, text = gate.check_fresh_data(friday, table, monday)
+    assert passed and "on time" in text
+    # BAFU late on Sunday: D is Saturday, one day late, still yes (MS2 review point A2).
+    late = table.copy()
+    late.loc[pd.Timestamp("2026-11-15"), "n_readings_d0"] = 80
+    passed, text = gate.check_fresh_data(friday, late, monday)
+    assert passed and "delayed" in text
     # Fresh features, but no new label for 37 days (the case of the review of 18.11.2026): no.
-    passed, text = gate.check_fresh_data(pd.Timestamp("2026-10-10"), newest, monday)
+    passed, text = gate.check_fresh_data(pd.Timestamp("2026-10-10"), table, monday)
     assert not passed and "label" in text
-    # Features older than 2 days (the rule of check_fresh.py): no.
-    assert not gate.check_fresh_data(pd.Timestamp("2026-11-13"), newest, dt.date(2026, 11, 20))[0]
-    # No row with all features at all: no.
-    assert not gate.check_fresh_data(pd.Timestamp("2026-11-13"), newest.iloc[:0], monday)[0]
+    # Four days later without a new row: D is 4 days before S: no.
+    passed, text = gate.check_fresh_data(friday, table, monday + dt.timedelta(days=4))
+    assert not passed and "4 days before" in text
+    # The row of D misses a forecast (the old age rule would have taken Saturday's row): no.
+    broken = table.copy()
+    broken.loc[pd.Timestamp("2026-11-15"), "air_temp_fc_d1"] = np.nan
+    passed, text = gate.check_fresh_data(friday, broken, monday)
+    assert not passed and "misses air_temp_fc_d1" in text
+    # No row with a label at all: no.
+    assert not gate.check_fresh_data(pd.NaT, table, monday)[0]
 
 
 # --- The newest rows and the final decision -------------------------------------------

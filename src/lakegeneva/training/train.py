@@ -318,13 +318,14 @@ def main() -> None:
     if not args.no_mlflow:
         # Log both models with the code and data versions, register the full model and
         # promote it if it passes the gate (track.py, gate.py).
-        from lakegeneva.training import gate, track
+        from lakegeneva.training import track
 
         print()
         # model_rows: the rows with a label, for training and the validation checks.
-        # newest_rows: the newest days with all features, also without a label yet:
-        # the days of the live forecast, for the shadow and plausibility checks.
-        decision = track.track(results, model_rows(table), data, gate.newest_rows(table))
+        # table: the whole table; the gate takes its newest days with all features (the
+        # days of the live forecast, for the shadow and plausibility checks) and the row
+        # of its issue day (for the freshness check G5).
+        decision = track.track(results, model_rows(table), data, table)
         # A version that did not pass the gate turns the run red (exit code 1), so GitHub
         # sends an email and a person looks at it. The version stays registered with its
         # tags, and the champion stays the same. A model on an unproven data version is

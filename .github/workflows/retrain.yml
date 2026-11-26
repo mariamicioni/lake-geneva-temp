@@ -76,9 +76,10 @@ jobs:
       # 5. Stop if the table is old (found in a review on 15.11.2026). Without this
       #    step, after a week of red feature runs the job would train on the old table,
       #    register a "new" version and move the alias to it. check_fresh.py is the same
-      #    check as at the end of the feature pipeline: the newest row with all features
-      #    may be at most 2 days old. On Monday morning it should be Sunday's row (1 day).
-      #    A red step stops the job, so nothing is logged or registered.
+      #    check as at the end of the feature pipeline: the row of the issue day D for
+      #    the newest evening S. On Monday morning S is Sunday, and D should be Sunday
+      #    (or Saturday, one day late, if BAFU was late). A red step stops the job, so
+      #    nothing is logged or registered.
       - name: Check that the feature table is fresh
         run: uv run --locked python -m lakegeneva.features.check_fresh
 

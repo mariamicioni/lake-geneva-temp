@@ -1,4 +1,4 @@
-"""Tests for check_fresh.py: the daily job turns red if the feature table is too old."""
+"""Tests for check_fresh.py: the row of the issue day D for the service evening S (MS2 review point A2)."""
 # How to run: `uv run pytest` (locally) - CI runs the same on every push.
 import datetime as dt
 import sys
@@ -11,56 +11,146 @@ from lakegeneva.common import features
 from lakegeneva.features import check_fresh
 
 WORKFLOW = Path(__file__).parent.parent / ".github" / "workflows" / "feature-pipeline.yml"
-TODAY = dt.date(2026, 11, 1)
+EVENING = dt.date(2026, 11, 25)  # the service evening S of most tests
 
 
-def table_until(last_day: str) -> pd.DataFrame:
-    """A small table with all features filled, three days up to last_day."""
+def table_until(last_day: str, readings=(108, 108, 108)) -> pd.DataFrame:
+    """Three days up to last_day, all features filled, `readings` before 18:00 on each day."""
     days = pd.date_range(end=last_day, periods=3, freq="D", name="date")
-    return pd.DataFrame(1.0, index=days, columns=features.FEATURES)
+    table = pd.DataFrame(1.0, index=days, columns=features.FEATURES)
+    table["n_readings_d0"] = list(readings)
+    return table
 
 
-def run_main(monkeypatch, tmp_path, table, now) -> None:
-    """Save the table as Parquet and start main() as if today were the date `now`."""
+def utc(text: str) -> dt.datetime:
+    """A time in UTC, e.g. utc("2026-11-26 02:05")."""
+    return dt.datetime.fromisoformat(text).replace(tzinfo=dt.timezone.utc)
+
+
+def test_the_service_evening_is_the_newest_scheduled_start_that_has_passed():
+    # The run of 25.11 committed after midnight (03:05 Swiss = 02:05 UTC): still 25.11.
+    assert check_fresh.service_day(utc("2026-11-26 02:05")) == EVENING
+    # 19:30 UTC: the job of 25.11 is due ...
+    assert check_fresh.service_day(utc("2026-11-25 19:30")) == EVENING
+    # ... at 18:30 UTC not yet, so it is the evening before.
+    assert check_fresh.service_day(utc("2026-11-25 18:30")) == dt.date(2026, 11, 24)
+    # A Monday retrain that GitHub starts late, in summer (16:44 UTC = 18:44 Swiss):
+    # Sunday, whose job has run, not Monday, whose job is not due yet (check of 26.11.2026).
+    assert check_fresh.service_day(utc("2026-06-29 16:44")) == dt.date(2026, 6, 28)
+    # The same in winter, as on 23.11.2026.
+    assert check_fresh.service_day(utc("2026-11-23 16:44")) == dt.date(2026, 11, 22)
+
+
+def test_the_scheduled_start_is_the_one_of_the_daily_job():
+    # If someone moves the cron of the daily job, the service evening must move with it.
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    assert f'cron: "0 {check_fresh.SCHEDULE_HOUR_UTC} * * *"' in workflow
+
+
+def test_on_time_when_the_issue_day_is_the_service_evening():
+    passed, delayed, text = check_fresh.check_issue_day(table_until("2026-11-25"), EVENING)
+
+    assert passed and not delayed
+    assert text.startswith("on time") and "D 25.11.2026" in text
+
+
+def test_one_day_late_passes_but_says_delayed():
+    # 25.11 has only 78 readings before 18:00 at run time (as 19.11.2026 had): D is 24.11.
+    table = table_until("2026-11-25", readings=(108, 108, 78))
+
+    passed, delayed, text = check_fresh.check_issue_day(table, EVENING)
+
+    assert passed and delayed
+    assert "D 24.11.2026" in text and "78 of the 90" in text
+
+
+def test_two_days_late_fails():
+    # Neither 25.11 nor 24.11 has 90 readings: D is 23.11.
+    passed, _, text = check_fresh.check_issue_day(table_until("2026-11-25", readings=(108, 60, 40)), EVENING)
+    assert not passed and "2 days before" in text
+    # The same when the table has no row of S at all yet (a run that stopped early).
+    passed, _, text = check_fresh.check_issue_day(table_until("2026-11-23"), EVENING)
+    assert not passed and "2 days before" in text
+
+
+def test_a_feature_missing_on_the_issue_day_fails_although_an_older_row_is_complete():
+    # The case the old age rule let through: the row of D misses tomorrow's wind, the
+    # row before is complete (age 1 day, "fresh").
+    table = table_until("2026-11-25")
+    table.loc[pd.Timestamp("2026-11-25"), "wind_sw_fc_d1"] = None
+
+    passed, _, text = check_fresh.check_issue_day(table, EVENING)
+
+    assert not passed and "misses wind_sw_fc_d1" in text
+
+
+def test_no_complete_day_means_no_issue_day():
+    passed, _, text = check_fresh.check_issue_day(table_until("2026-11-25", readings=(10, 10, 10)), EVENING)
+
+    assert not passed and "no issue day" in text
+
+
+def test_other_broken_tables_fail_and_a_newer_table_passes():
+    # An infinite value is not a real feature either.
+    table = table_until("2026-11-25")
+    table.loc[pd.Timestamp("2026-11-25"), "air_temp_fc_d1"] = float("inf")
+    assert not check_fresh.check_issue_day(table, EVENING)[0]
+    # A missing count of readings (NaN) is "not complete": D is the day before.
+    table = table_until("2026-11-25", readings=(108, 108, None))
+    passed, delayed, _ = check_fresh.check_issue_day(table, EVENING)
+    assert passed and delayed
+    # Two rows for one date: not clear which is the row of D.
+    doubled = pd.concat([table_until("2026-11-25"), table_until("2026-11-25").tail(1)])
+    passed, _, text = check_fresh.check_issue_day(doubled, EVENING)
+    assert not passed and "more than one row" in text
+    # D after S (a run in the afternoon, when today already has 90 readings): newer
+    # than needed, so on time.
+    passed, delayed, _ = check_fresh.check_issue_day(table_until("2026-11-26"), EVENING)
+    assert passed and not delayed
+
+
+def run_main(monkeypatch, tmp_path, table, *options) -> None:
+    """Save the table as Parquet and start main() with these command-line options."""
     path = tmp_path / "features.parquet"
     table.to_parquet(path)
-    monkeypatch.setattr(sys, "argv", ["check_fresh", "--table", str(path)])
-
-    # A fake clock, so that the test gives the same result on every day.
-    class FakeClock(dt.datetime):
-        @classmethod
-        def now(cls, tz=None):
-            return dt.datetime(now.year, now.month, now.day, 12, tzinfo=tz)
-
-    monkeypatch.setattr(check_fresh.dt, "datetime", FakeClock)
+    monkeypatch.setattr(sys, "argv", ["check_fresh", "--table", str(path), *options])
     check_fresh.main()
 
 
-def test_age_counts_from_the_newest_row_with_all_features():
-    table = table_until("2026-10-31")
-    assert check_fresh.age_in_days(table, TODAY) == 1
+def test_main_shows_a_warning_on_github_when_the_issue_day_is_late(monkeypatch, tmp_path, capsys):
+    late = table_until("2026-11-25", readings=(108, 108, 78))
 
-    # The water features of the newest day exist, but its forecast is missing: this
-    # row does not count, so the check also notices a forecast that stopped coming.
-    table.loc[pd.Timestamp("2026-10-31"), "wind_sw_fc_d1"] = None
-    assert check_fresh.age_in_days(table, TODAY) == 2
-
-
-def test_a_table_without_any_complete_row_has_no_age():
-    table = table_until("2026-10-31")
-    table["wind_sw_fc_d1"] = None
-    assert check_fresh.age_in_days(table, TODAY) is None
+    # On GitHub: a warning line first, which GitHub shows in yellow in the run summary.
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    run_main(monkeypatch, tmp_path, late, "--service-day", "2026-11-25")
+    assert capsys.readouterr().out.startswith("::warning title=Issue day delayed::delayed")
+    # On a laptop: the same text, without the warning line. The exit code is 0 both times.
+    monkeypatch.delenv("GITHUB_ACTIONS")
+    run_main(monkeypatch, tmp_path, late, "--service-day", "2026-11-25")
+    out = capsys.readouterr().out
+    assert out.startswith("delayed") and "::warning" not in out
 
 
-def test_two_days_are_allowed_and_three_days_fail(monkeypatch, tmp_path, capsys):
-    # 30.10 -> 01.11 = 2 days: a late or missed run is no alarm.
-    run_main(monkeypatch, tmp_path, table_until("2026-10-30"), TODAY)
-    assert "2 days old" in capsys.readouterr().out
-
-    # 29.10 -> 01.11 = 3 days: the exit code says that the run failed.
+def test_main_fails_with_the_reason(monkeypatch, tmp_path):
+    # The exit code says that the run failed; the text says why.
     with pytest.raises(SystemExit) as stop:
-        run_main(monkeypatch, tmp_path, table_until("2026-10-29"), TODAY)
-    assert "3 days old" in str(stop.value.code)
+        run_main(monkeypatch, tmp_path, table_until("2026-11-22"), "--service-day", "2026-11-25")
+    assert "3 days before the service evening S 25.11.2026" in str(stop.value.code)
+
+
+def test_main_takes_the_service_evening_from_the_clock(monkeypatch, tmp_path, capsys):
+    # A fake clock at 02:05 UTC on 26.11.2026, when the run of 25.11 really committed.
+    class FakeClock(dt.datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return dt.datetime(2026, 11, 26, 2, 5, tzinfo=tz)
+
+    monkeypatch.setattr(check_fresh.dt, "datetime", FakeClock)
+    monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
+
+    run_main(monkeypatch, tmp_path, table_until("2026-11-25"))
+
+    assert "service evening S 25.11.2026" in capsys.readouterr().out
 
 
 def test_the_daily_job_runs_the_check_after_storing_the_data():

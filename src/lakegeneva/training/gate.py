@@ -10,8 +10,9 @@ Five checks, and the new version becomes the champion only if all of them pass:
   same temperature. No label is needed.
 - G4, plausible: on the newest days, the new model never predicts a change bigger than
   the largest change before the test period.
-- G5, fresh data: the newest features AND the newest label are recent, so the new
-  version did not learn from a table that stopped growing.
+- G5, fresh data: the row of the issue day D is ready for the newest evening (the
+  same check as check_fresh.py) AND the newest label is recent, so the new version
+  did not learn from a table that stopped growing.
 
 No check reads a label of a test day (21.01.2025 onwards). The test days are only for
 reporting the result (README, MLflow), never for a decision.
@@ -37,7 +38,7 @@ reporting the result (README, MLflow), never for a decision.
 # a forecast is NaN), the answer is "no". Only a confirmed "there is no champion yet"
 # lets G2 and G3 be skipped.
 
-import datetime as dt  # today's date
+import datetime as dt  # the clock
 import hashlib  # md5: the fingerprint of the validation days
 import math  # math.isfinite: a number that is not NaN and not infinite
 from zoneinfo import ZoneInfo  # the Swiss clock
@@ -46,7 +47,7 @@ import numpy as np  # np.isfinite on many numbers at once
 import pandas as pd  # the feature table and the forecasts
 
 from lakegeneva.common import baselines, features, forecasting  # shared definitions
-from lakegeneva.features import check_fresh  # the freshness rule of the feature pipeline
+from lakegeneva.features import check_fresh  # the issue-day check of the feature pipeline
 from lakegeneva.training import experiments, train  # row 3 and the walk-forward test
 
 # --- Settings -----------------------------------------------------------------
@@ -72,8 +73,8 @@ MAX_CHANGE = 5.304583
 NEWEST_DAYS = 7
 # G5: how old the newest row WITH A LABEL may be. Normal: on Monday morning (retrain.yml)
 # it is Friday's row, 3 days old, because a label needs the whole next day. If the
-# feature run of Sunday failed, it is Thursday's (4 days), while the features are still
-# fresh enough for check_fresh (2 days). 5 gives one more day. Older means that the
+# feature run of Sunday failed, it is Thursday's (4 days), while Saturday's row still
+# passes the issue-day check (one day late). 5 gives one more day. Older means that the
 # labels stopped coming although the features did not (review of 18.11.2026: with
 # fresh features and no new label for 37 days, the gate still passed).
 MAX_LABEL_AGE_DAYS = 5
@@ -88,9 +89,9 @@ CHECKS = (
 )
 
 
-def today() -> dt.date:
-    """Today's date in Switzerland (a function, so the tests can set another day)."""
-    return dt.datetime.now(ZoneInfo(features.TIMEZONE)).date()
+def now() -> dt.datetime:
+    """The time now, in UTC (a function, so the tests can set another time)."""
+    return dt.datetime.now(dt.timezone.utc)
 
 
 def is_number(value) -> bool:
@@ -212,33 +213,39 @@ def check_plausible(candidate_forecast: pd.Series, newest: pd.DataFrame) -> tupl
     return False, f"failed: predicted change {largest:.3f} degC > {MAX_CHANGE}"
 
 
-def check_fresh_data(last_label: pd.Timestamp, newest: pd.DataFrame, day: dt.date) -> tuple[bool, str]:
-    """G5: the newest features and the newest label are recent on `day` (today)."""
+def check_fresh_data(last_label: pd.Timestamp, table: pd.DataFrame, time: dt.datetime) -> tuple[bool, str]:
+    """G5: at `time` (now), the row of the issue day is ready and the newest label is recent."""
     # Why here and not only in retrain.yml: the workflow's freshness step looks at the
     # features only, and a training started by hand (train.py on a laptop) skips the
     # workflow. This check is on the way of EVERY promotion (review of 18.11.2026).
     # Training and logging still work with old data (e.g. a reviewer who rebuilds an
     # old data version); only the promotion to champion is refused.
-    if len(newest) == 0 or pd.isna(last_label):
-        return False, "failed: no row with all features or no row with a label"
-    # The same rule as check_fresh.py in the feature pipeline: the newest row with all
-    # features at most 2 days old.
-    feature_age = (day - newest.index.max().date()).days
-    label_age = (day - last_label.date()).days
-    if feature_age > check_fresh.MAX_AGE_DAYS:
-        return False, f"failed: the newest features are {feature_age} days old (allowed: {check_fresh.MAX_AGE_DAYS})"
+    if pd.isna(last_label):
+        return False, "failed: no row with a label"
+    # The same check as check_fresh.py at the end of the feature pipeline (MS2 review
+    # point A2): the row of the issue day D, for the evening S of the newest daily job
+    # that was due (19:00 UTC). Before, it was "the newest row with all features at most
+    # 2 days old". On Monday (until 19:00 UTC) S is Sunday, and D is Sunday or, if BAFU
+    # was late, Saturday.
+    passed, _, text = check_fresh.check_issue_day(table, check_fresh.service_day(time))
+    if not passed:
+        return False, f"failed: {text}"
+    label_age = (time.astimezone(ZoneInfo(features.TIMEZONE)).date() - last_label.date()).days
     if label_age > MAX_LABEL_AGE_DAYS:
         return False, f"failed: the newest label is {label_age} days old (allowed: {MAX_LABEL_AGE_DAYS})"
-    return True, f"passed: features {feature_age} days old, newest label {label_age} days old"
+    return True, f"passed: {text}; newest label {label_age} days old"
 
 
-def run_checks(summary: dict, candidate, champion: dict | None, newest: pd.DataFrame, last_label: pd.Timestamp) -> dict:
+def run_checks(summary: dict, candidate, champion: dict | None, table: pd.DataFrame, last_label: pd.Timestamp) -> dict:
     """All five checks on the REGISTERED candidate (loaded back from MLflow). Returns check -> text."""
     # candidate: the model as it was loaded back from the registry, so the checks test
     # the artifact that would become the champion, not only the object in memory.
     # champion: None if it is confirmed that there is no champion; otherwise a dict with
     # its "model", "params" and "metrics" (track.champion_info).
+    # table: the whole feature table. G3 and G4 use its newest rows with all features,
+    # G5 the row of its issue day (which may miss a feature, so it is not in `newest`).
     # last_label: the date of the newest row with a label (the newest training row).
+    newest = newest_rows(table)
     candidate_forecast = forecasting.temperature_for_rows(candidate, newest)
     champion_forecast = None
     if champion is not None:
@@ -248,7 +255,7 @@ def run_checks(summary: dict, candidate, champion: dict | None, newest: pd.DataF
         check_champion_validation(summary, champion),
         check_shadow(candidate_forecast, champion_forecast),
         check_plausible(candidate_forecast, newest),
-        check_fresh_data(last_label, newest, today()),
+        check_fresh_data(last_label, table, now()),
     ]
     return {name: text for name, (_, text) in zip(CHECKS, results)}
 

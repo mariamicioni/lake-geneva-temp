@@ -53,7 +53,7 @@ Units in the raw files: `water_temp_c` °C, `flow_m3s` m³/s, `temperature_2m` �
 - **Weather features from the 06:00 UTC runs** (only for the comparison in `experiments.py`, not in the feature table): for day D the run of D (published at about 12:00 UTC, before 18:00), never the run of D+1; the night hours of D before 06:00 UTC come from the run of D-1 (`single_run_weather_features()` in `features.py`).
 - **Clock-change days** have 23 or 25 hours (138 or 150 readings) and count as complete.
 - **Impossible values:** water temperature outside 0 to 35 °C or flow outside -50 to 1500 m³/s becomes an empty cell, with a warning in the log (`load_water()` in `features.py`). The limits are wide on purpose: on 01.11.2026 no raw reading was outside them (4.6 to 27.7 °C, -14.9 to 642.9 m³/s), so the rule changes no table today. 22 raw flow readings are negative, and they stay in the data.
-- **A table that is too old:** the daily job turns red if the newest row with all features is more than 2 days old (`check_fresh.py`).
+- **A table that is too old:** `check_fresh.py` looks at the row of the issue day D for the service evening S (the day of the newest scheduled start of the daily job, 19:00 UTC, before the check runs). D = S: on time. D = S − 1: "delayed", a warning in the run summary, still green (BAFU had not delivered 90 readings of S before 18:00 yet). No D, D older than S − 1, or a missing feature in the row of D: the daily job turns red.
 - **Extreme but real values:** `water_trend_3d` goes from -11.5 °C (upwelling after south-west wind, 5-8 July 2025) to +9.6 °C (June 2024).
 
 ## Versions
