@@ -41,6 +41,8 @@ CHAMPION = "champion"
 WINDOW_NAMES = {"test, all year": "test", "test, change > 0.8": "big_change", "test, Oct-Jan": "oct_jan"}
 COLUMN_NAMES = {
     "days": "days",
+    # Only in the big-change window: runs of consecutive big-change days (review point B3).
+    "events": "events",
     "model": "mae",
     "persistence": "mae_persistence",
     # The target baseline (frozen factor, param trend_factor). Runs before 20.11.2026

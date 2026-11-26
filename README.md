@@ -19,7 +19,7 @@ Every evening on day D the model predicts the mean water temperature of D+1 from
 
 The model succeeds if its MAE is **at least 20 % lower than the MAE of the target baseline, on the same days**:
 - **Main target:** the test days from 21.01.2025 on. For each test day the model is trained again on the earlier days whose label is already known at 18:00 of that day (walk-forward evaluation in MS3). The day just before is not used, because its label is the mean of the test day itself. The first year with all features (21.01.2024–20.01.2025, 366 days) is for validation: it is used to choose the model settings and the target baseline and never counts for the target. The same rule holds there: both use the validation days up to 19.01.2025, whose labels are known at 18:00 on the first test day.
-- **Target on the big-change days:** the test days on which tomorrow's mean differs by more than 0.8 °C from today's last reading before 18:00. On these days persistence fails.
+- **Target on the big-change days:** the test days on which tomorrow's mean differs by more than 0.8 °C from today's last reading before 18:00. On these days persistence fails. They come in streaks, so they are fewer separate events than days: on 14.11.2026 the 101 big-change test days were 57 events (runs of consecutive days; 33 single days, the longest run 7 days), counted by `count_events()` in `baselines.py`. Their bootstrap intervals use blocks of 7 calendar days, not of 7 rows.
 - **Reported, not a target:** October–January (177 test days on 14.11.2026; only 7 of them are big-change days, too few for a target) and the live period October 2026 – January 2027 (monitoring in MS4).
 
 The **target baseline** is trend-adjusted persistence: the last reading before 18:00 plus a factor times the 3-day trend. The factor was chosen once, on the 365 validation days only, as the one with the lowest MAE, and then frozen in `baselines.py` (20.11.2026, MS2 review point B1). Before, the target used the better of plain and trend-adjusted persistence on the test days themselves, so it could switch as new test days came in.
@@ -35,7 +35,7 @@ The factor is negative: tomorrow tends to move a little against the 3-day trend.
 | Test days (21.01.2025–12.11.2026, 18:00 cutoff) | Days | Persistence MAE | Target baseline MAE | Target MAE (−20 %) |
 |---|---|---|---|---|
 | all test days | 661 | 0.526 °C | 0.530 °C | ≤ 0.424 °C |
-| change > 0.8 °C | 101 | 1.930 °C | 1.897 °C | ≤ 1.518 °C |
+| change > 0.8 °C | 101 (57 events) | 1.930 °C | 1.897 °C | ≤ 1.518 °C |
 | October–January (reported) | 177 | 0.281 °C | 0.306 °C | (0.245 °C) |
 
 Numbers of 14.11.2026. Every new day adds one test day, so the numbers move a little; the baseline and its factor do not (on 27.10.2026, in the MS2 summary, with the old rule: 643 test days and a target of 0.425 °C). `python src/lakegeneva/common/baselines.py` recomputes them with 95 % bootstrap intervals [8] (blocks of 7 calendar days) and fits the factor again as a check. The criterion changed since the proposal; `docs/ms2_summary.pdf` explains why (MS1 review points A1, A2/B2, B3).
@@ -81,7 +81,7 @@ The model is a Ridge regression [13]. It predicts tomorrow's change (tomorrow's 
 
 Results on the 661 test days (21.01.2025–12.11.2026), every row on the same days (`experiments.py`, numbers of 14.11.2026):
 
-| | MAE, all test days | MAE, change > 0.8 °C (101 days) | One training |
+| | MAE, all test days | MAE, change > 0.8 °C (101 days, 57 events) | One training |
 |---|---|---|---|
 | 1 Persistence: the last reading before 18:00 | 0.526 °C | 1.930 °C | none |
 | 2 Trend-adjusted persistence, factor −0.075 (the target baseline) | 0.530 °C | 1.897 °C | none |

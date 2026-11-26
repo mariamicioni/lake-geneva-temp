@@ -105,6 +105,12 @@ def test_intervals_compare_the_rungs_of_the_ladder(small):
     oct_jan = result.loc[("5 all features - 4 water only", "Oct-Jan")]
     assert oct_jan["days"] == 10
     assert pd.isna(oct_jan["ci_low"])
+    # Next to the big-change days: how many events they are (review point B3), and only there.
+    big = baselines.big_change_days(rows.loc[test_days]).to_numpy()
+    big_row = result.loc[("5 all features - 4 water only", "change > 0.8")]
+    assert big_row["days"] == big.sum()
+    assert big_row["events"] == baselines.count_events(test_days[big])
+    assert pd.isna(result.loc[("5 all features - 4 water only", "all test days"), "events"])
 
 
 def test_a_missing_forecast_stops_the_experiments(small, monkeypatch):

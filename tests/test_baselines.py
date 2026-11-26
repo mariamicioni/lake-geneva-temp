@@ -194,3 +194,36 @@ def test_report_gives_no_interval_for_a_handful_of_days():
     assert row["days"] == 10
     assert row["persistence"] == pytest.approx(1.0)  # the MAE is still shown ...
     assert pd.isna(row["ci_low"]) and pd.isna(row["ci_high"])  # ... but no interval
+
+
+def test_events_are_runs_of_consecutive_days():
+    # 1.-3. March is one streak, 5. March a second, 7.-8. March a third (review point B3).
+    days = pd.to_datetime(["2025-03-01", "2025-03-02", "2025-03-03", "2025-03-05", "2025-03-07", "2025-03-08"])
+
+    assert baselines.count_events(days) == 3
+    # The order does not matter, and a day counted twice is still one day.
+    assert baselines.count_events(days[::-1].append(days[:1])) == 3
+    assert baselines.count_events([]) == 0
+
+
+def test_events_do_not_join_across_a_clock_change():
+    # 30.03.2025 is missing. The clock moved that night, so the two Swiss midnights are
+    # only 47 hours apart: still two events, not one (review of 26.11.2026).
+    days = pd.DatetimeIndex(["2025-03-29", "2025-03-31"], tz="Europe/Zurich")
+
+    assert baselines.count_events(days) == 2
+    # ... and in autumn the 25-hour day 26.10.2025 keeps 26. and 27.10 one event.
+    assert baselines.count_events(pd.DatetimeIndex(["2025-10-26", "2025-10-27"], tz="Europe/Zurich")) == 1
+
+
+def test_report_counts_the_events_of_the_big_change_days():
+    # 10 big-change days in a row (1 °C change): 10 days, but one event.
+    table = feature_rows(60)
+    table.iloc[:10, table.columns.get_loc(features.LABEL)] = 11.0
+
+    result = baselines.report(table)
+
+    assert result.loc["all features, change > 0.8", "days"] == 10
+    assert result.loc["all features, change > 0.8", "events"] == 1
+    # Windows that are not about big changes have no event count.
+    assert pd.isna(result.loc["all features, all year", "events"])

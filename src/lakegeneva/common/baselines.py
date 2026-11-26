@@ -119,6 +119,25 @@ def big_change_days(table: pd.DataFrame) -> pd.Series:
     return (table[features.LABEL] - table["water_last"]).abs() > BIG_CHANGE
 
 
+def count_events(days) -> int:
+    """How many separate events a set of days is: runs of consecutive calendar days."""
+    # Big-change days come in streaks: one upwelling can give three big-change days in
+    # a row, which are one event, not three (MS2 review point B3, also E3). A new event
+    # starts on every day whose day before is not in the set.
+    days = pd.DatetimeIndex(days)
+    # Days with a time zone (e.g. Europe/Zurich): keep the local date and drop the
+    # zone. Otherwise the night of a clock change is 23 or 25 hours long, and 29.03 and
+    # 31.03.2025 (47 hours apart) would count as neighbours, as one event (found in a
+    # review on 26.11.2026). The feature table itself has dates without a zone.
+    if days.tz is not None:
+        days = days.tz_localize(None)
+    days = days.normalize().unique().sort_values()
+    if len(days) == 0:
+        return 0
+    gaps = (days[1:] - days[:-1]).days
+    return 1 + int((gaps > 1).sum())
+
+
 def bootstrap_mae_difference(errors_a, errors_b, block: int = BLOCK_DAYS, seed: int = SEED):
     """MAE(a) - MAE(b) and its 95 % confidence interval (moving-block bootstrap of calendar days)."""
     # The bootstrap answers "how sure are we about this difference?": it builds many
@@ -206,6 +225,10 @@ def report(table: pd.DataFrame) -> pd.DataFrame:
         error_persistence = (persistence(part) - part[features.LABEL]).abs()
         error_trend = (target_baseline(part) - part[features.LABEL]).abs()
         row = {"window": name, "days": len(part)}
+        # For the big-change windows also the number of events (runs of consecutive
+        # days, review point B3): 101 days are fewer than 101 separate cases.
+        if "change > 0.8" in name:
+            row["events"] = count_events(part.index)
         if len(part) > 0:
             mae_persistence, mae_trend = error_persistence.mean(), error_trend.mean()
             # |= adds these entries to the row dict.

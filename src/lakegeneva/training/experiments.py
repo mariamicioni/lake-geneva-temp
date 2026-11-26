@@ -80,6 +80,19 @@ def difference(error_a: pd.Series, error_b: pd.Series, in_window) -> dict:
     return row
 
 
+def window_differences(error_a: pd.Series, error_b: pd.Series, part: pd.DataFrame) -> dict:
+    """difference() in each window of the README; the big-change window also counts its events."""
+    result = {}
+    for window, in_window in windows_of(part).items():
+        row = difference(error_a, error_b, in_window)
+        if window == "change > 0.8":
+            # Next to the day count: how many separate events these days are, as runs
+            # of consecutive days (MS2 review point B3; train.py logs the same number).
+            row = {"days": row.pop("days"), "events": baselines.count_events(part.index[in_window])} | row
+        result[window] = row
+    return result
+
+
 def fit_seconds(rows: pd.DataFrame, columns: list[str], alpha: float) -> float:
     """Median time of one training fit on all rows (seconds)."""
     times = []
@@ -160,8 +173,8 @@ def intervals(rows: pd.DataFrame, test_days, alphas: dict) -> pd.DataFrame:
     ]
     result = {}
     for a, b in pairs:
-        for window, in_window in windows_of(part).items():
-            result[(f"{a} - {b}", window)] = difference(errors[a], errors[b], in_window)
+        for window, row in window_differences(errors[a], errors[b], part).items():
+            result[(f"{a} - {b}", window)] = row
     return pd.DataFrame(result).T
 
 
@@ -211,9 +224,7 @@ def forecast_comparison(rows: pd.DataFrame, single: pd.DataFrame) -> tuple[pd.Da
     # Both variants have the same rows, so they forecast the same days.
     old, fresh = variants  # the two names, in the order of the dict above
     part = rows.loc[errors[old].index]
-    differences = {
-        window: difference(errors[fresh], errors[old], in_window) for window, in_window in windows_of(part).items()
-    }
+    differences = window_differences(errors[fresh], errors[old], part)
     return pd.DataFrame(result).T, pd.DataFrame(differences).T
 
 

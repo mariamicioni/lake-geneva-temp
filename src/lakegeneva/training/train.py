@@ -205,6 +205,9 @@ def evaluate(rows: pd.DataFrame, forecast: pd.Series) -> pd.DataFrame:
     result = []
     for name, in_window in windows.items():
         row = {"window": name, "days": int(in_window.sum())}
+        # The big-change days also as events: runs of consecutive days (review point B3).
+        if "change > 0.8" in name:
+            row["events"] = baselines.count_events(part.index[in_window])
         if row["days"] > 0:
             mae_model = error_model[in_window].mean()
             mae_persistence = error_persistence[in_window].mean()

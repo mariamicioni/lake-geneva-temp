@@ -194,6 +194,9 @@ def test_evaluate_compares_with_persistence_in_each_window():
     assert result.loc["test, all year", "target"] == pytest.approx(0.8 * result.loc["test, all year", "trend_adjusted"])
     # February to March: no October-to-January day.
     assert result.loc["test, Oct-Jan", "days"] == 0
+    # The big-change days also as events (runs of consecutive days, review point B3).
+    big = baselines.big_change_days(rows.loc[forecast.index])
+    assert result.loc["test, change > 0.8", "events"] == baselines.count_events(rows.index[big.to_numpy()])
 
 
 def test_a_forecast_with_missing_values_gives_no_result():

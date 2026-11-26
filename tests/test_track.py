@@ -75,13 +75,20 @@ def test_target_is_not_met_when_a_window_was_not_tested():
 
 def test_flat_metrics_names_every_number_and_skips_empty_ones():
     evaluation = pd.DataFrame(
-        {"days": [100, 5], "model": [0.4, 1.2], "ci_high": [-0.1, np.nan]},
+        {"days": [100, 5], "events": [np.nan, 3], "model": [0.4, 1.2], "ci_high": [-0.1, np.nan]},
         index=["test, all year", "test, change > 0.8"],
     )
 
     metrics = track.flat_metrics(evaluation)
 
-    assert metrics == {"test_days": 100, "test_mae": 0.4, "test_ci_high": -0.1, "big_change_days": 5, "big_change_mae": 1.2}
+    assert metrics == {
+        "test_days": 100,
+        "test_mae": 0.4,
+        "test_ci_high": -0.1,
+        "big_change_days": 5,
+        "big_change_events": 3,  # runs of consecutive big-change days (review point B3)
+        "big_change_mae": 1.2,
+    }
 
 
 def test_a_run_logs_both_models_and_registers_the_full_one(local_mlflow, trained):
