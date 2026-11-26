@@ -1,13 +1,16 @@
 """Training experiments: is the model worth it, how much data, how often to retrain?
 
-Three questions from the SW09 lecture ("Your pipeline") and one from the MS2 summary,
-answered on the test days from 21.01.2025, always with the walk-forward test of train.py:
+Three questions from the SW09 lecture ("Your pipeline") and two from the MS2 summary
+and its review, answered on the test days from 21.01.2025, always with the walk-forward
+test of train.py:
 
 1. Ladder: from the cheapest forecast to the full model, with error and training time.
 2. Data: train only on the last 4, 6 or 12 months instead of all earlier rows.
 3. Retrain: a new model every day, every week, every month or only once.
 4. Forecast: the 48-hour-old forecast (the features now) against the forecast of the
    06:00 UTC model run of the same day (a promise of the MS2 summary).
+5. Weather point: Geneva against a point on the open lake (only with --lake-point,
+   it downloads the lake's forecast; MS2 review point B2).
 
 Every difference that the README names comes with its 95 % interval, from the same
 bootstrap as the baselines, so every number of the README can be repeated.
@@ -27,7 +30,8 @@ import time  # perf_counter() measures how long training takes
 import numpy as np  # median of the measured times; np.ones for the "all test days" window
 import pandas as pd  # the daily feature table
 
-from lakegeneva.common import baselines, feature_store, features  # the baselines and column names; the read path
+from lakegeneva.common import baselines, feature_store, features, location  # the baselines and column names; the read path; the lake point
+from lakegeneva.features import ingest_weather_runs  # the 48-hour-old forecast, here at the lake point (question 5)
 from lakegeneva.training import train  # the model and the walk-forward test
 
 # The training windows of question 2, in days (None: all earlier rows). Not shorter
@@ -228,6 +232,89 @@ def forecast_comparison(rows: pd.DataFrame, single: pd.DataFrame) -> tuple[pd.Da
     return pd.DataFrame(result).T, pd.DataFrame(differences).T
 
 
+def lake_weather(start, end) -> pd.DataFrame:
+    """The five weather features from the 48-hour-old forecast at the lake point (downloads it)."""
+    # The same request as the daily job (ingest_weather_runs.fetch), only at another
+    # point, and with the grid cell over the water (location.py); nothing is saved.
+    # Public API, no key; about 15 seconds since 2024.
+    hourly = ingest_weather_runs.fetch(
+        start,
+        end,
+        location.LAKE_LATITUDE,
+        location.LAKE_LONGITUDE,
+        cell_selection=location.LAKE_CELL_SELECTION,
+    )
+    hours = pd.DataFrame(hourly)
+    hours["time_utc"] = pd.to_datetime(hours.pop("time"), utc=True)
+    hours["time_local"] = hours["time_utc"].dt.tz_convert(features.TIMEZONE)
+    # The shared definition of the weather features, on the lake's hours.
+    return features.weather_features(hours)
+
+
+def lake_point_comparison(rows: pd.DataFrame, lake: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Question 5 (MS2 review point B2): is the Geneva point enough, or does a point on the lake help?
+
+    lake: the weather features at the lake point (lake_weather). The validation MAE
+    decides; the test days are only reported. Returns the error of each version, and
+    the difference of each lake version to Geneva with its interval, on the validation
+    year and in each window of the test days.
+    """
+    lake = lake.reindex(rows.index)
+    # Version 2: all five weather features from the lake point instead of Geneva.
+    instead = rows.copy()
+    instead[features.WEATHER_FEATURES] = lake[features.WEATHER_FEATURES]
+    # Version 3: Geneva, plus the lake's south-west wind of today and tomorrow, the two
+    # features of the upwelling (review point A3).
+    extra = ["wind_sw_lake_d0", "wind_sw_lake_d1"]
+    added = rows.copy()
+    added[extra] = lake[["wind_sw_fc_d0", "wind_sw_fc_d1"]].to_numpy()
+    # A fair comparison: only the days on which both points have all features.
+    both = lake[features.WEATHER_FEATURES].notna().all(axis=1)
+    variants = {
+        "Geneva (the features now)": (rows[both], train.FEATURES_FULL),
+        "lake point instead of Geneva": (instead[both], train.FEATURES_FULL),
+        "Geneva + the lake's south-west wind": (added[both], train.FEATURES_FULL + extra),
+    }
+    result, errors, validation_errors = {}, {}, {}
+    for name, (part, columns) in variants.items():
+        test_days = part.index[part.index >= baselines.TEST_START]
+        # Each version chooses its own setting on its validation days, as in train.py,
+        # and its validation MAE at that setting is the number that decides.
+        alpha, validation = train.choose_alpha(part, columns)
+        # The validation forecasts once more at the chosen setting (the same days as in
+        # choose_alpha), so the deciding difference gets its interval, and the big-change
+        # days of the validation year can be shown too (review of 26.11.2026).
+        on_validation = train.walk_forward(part, columns, alpha, baselines.validation_days(part).index)
+        validation_errors[name] = (on_validation - part.loc[on_validation.index, features.LABEL]).abs()
+        big_on_validation = baselines.big_change_days(part.loc[on_validation.index]).to_numpy()
+        forecast = train.walk_forward(part, columns, alpha, test_days)
+        result[name] = {
+            "validation MAE (decides)": validation[alpha],
+            "validation change > 0.8 MAE": validation_errors[name][big_on_validation].mean(),
+        } | scores(part, forecast, test_days) | {"alpha": alpha, "test days": len(forecast)}
+        errors[name] = (forecast - part.loc[forecast.index, features.LABEL]).abs()
+    # Each lake version against Geneva on the same days, with the interval: a small
+    # difference alone does not say that one point is better (as in question 4). First
+    # the validation year: all its days decide, its big-change days and October to
+    # January are shown next to them. Then the test days, which are only reported.
+    geneva = next(iter(variants))
+    periods = {
+        "validation year": (validation_errors, rows.loc[validation_errors[geneva].index]),
+        "test days": (errors, rows.loc[errors[geneva].index]),
+    }
+    differences = {}
+    for name in list(variants)[1:]:
+        for period, (period_errors, part) in periods.items():
+            for window, row in window_differences(period_errors[name], period_errors[geneva], part).items():
+                # windows_of() calls the first window "all test days"; here it is all
+                # days of the period.
+                label = "all days" if window == "all test days" else window
+                if period == "validation year" and label == "all days":
+                    label += " (decides)"
+                differences[f"{name} - Geneva, {period}, {label}"] = row
+    return pd.DataFrame(result).T, pd.DataFrame(differences).T
+
+
 def main() -> None:
     # Command-line options; __doc__ (the text at the top) becomes the --help text.
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -240,6 +327,9 @@ def main() -> None:
     # Question 4 needs the raw files of the 06:00 UTC runs: they are not in the feature
     # store, because the model does not use them (yet).
     parser.add_argument("--raw", default="data/raw", help="folder with the raw files")
+    # Question 5 downloads the forecast at the lake point (public API, no key), so it
+    # needs the internet and runs only when asked for.
+    parser.add_argument("--lake-point", action="store_true", help="also question 5: a weather point on the lake")
     args = parser.parse_args()
 
     # The same read path as train.py (feature_store.py, review point E1).
@@ -268,6 +358,18 @@ def main() -> None:
     print(comparison.round(3).to_string())
     print("\n  06:00 UTC run - 48-hour-old forecast (below 0: the fresher one is better) with 95 % intervals")
     print(differences.round(3).to_string())
+    if args.lake_point:
+        print(f"\n5 Weather point: Geneva against a point on the lake ({location.LAKE_LATITUDE} N, {location.LAKE_LONGITUDE} E)")
+        # One day before the first row (for the night hours of the first day) up to tomorrow.
+        start, end = rows.index.min() - pd.Timedelta(days=1), table.index.max() + pd.Timedelta(days=1)
+        lake = lake_weather(start.date(), end.date())
+        comparison, differences = lake_point_comparison(rows, lake)
+        print(comparison.round(3).to_string())
+        print(
+            "\n  Lake version - Geneva (below 0: the lake version is better) with 95 % intervals:"
+            " the validation year decides, the test days are only reported"
+        )
+        print(differences.round(3).to_string())
 
 
 # Runs main() only when the file is started as a script, not when it is imported

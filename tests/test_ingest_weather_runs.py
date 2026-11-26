@@ -37,6 +37,26 @@ def test_fetch_asks_for_the_48_hour_old_values(monkeypatch):
     # ... for the requested days, in UTC (features.py converts to Swiss time).
     assert "start_date=2024-01-20&end_date=2024-01-21" in url
     assert "timezone=GMT" in url
+    # The daily job leaves the choice of the grid cell to the API (as before B2).
+    assert "cell_selection" not in url
+
+
+def test_fetch_can_ask_for_the_nearest_grid_cell(monkeypatch):
+    # The lake point of experiments.py (review point B2): the API's default would take a
+    # cell on land, "nearest" takes the cell over the water.
+    urls = []
+
+    def fake_urlopen(request, timeout):
+        urls.append(request.full_url)
+        return io.BytesIO(json.dumps({"hourly": {"time": []}}).encode())
+
+    monkeypatch.setattr(ingest_weather_runs.urllib.request, "urlopen", fake_urlopen)
+
+    ingest_weather_runs.fetch(dt.date(2024, 1, 20), dt.date(2024, 1, 21), 46.44, 6.49, cell_selection="nearest")
+
+    [url] = urls
+    assert "latitude=46.44&longitude=6.49" in url
+    assert url.endswith("&cell_selection=nearest")
 
 
 def test_write_csv_has_one_row_per_hour_and_leaves_missing_values_empty(tmp_path):

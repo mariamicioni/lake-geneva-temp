@@ -146,3 +146,115 @@ def test_learning_curve_and_retrain_cover_every_setting(small):
     # A new model every day is the walk-forward test of train.py itself.
     daily = train.walk_forward(rows, train.FEATURES_FULL, 0.1, test_days)
     assert replay.loc["every day", "test MAE"] == pytest.approx(train.mae(rows, daily))
+
+
+def test_a_lake_point_with_the_same_weather_scores_the_same(small, monkeypatch):
+    rows, _ = small
+    monkeypatch.setattr(train, "ALPHAS", (0.1, 100.0))
+    # The "lake" has exactly Geneva's weather (review point B2): replacing the weather
+    # features changes nothing, and the extra lake wind only adds a copy.
+    lake = rows[features.WEATHER_FEATURES].copy()
+
+    comparison, differences = experiments.lake_point_comparison(rows, lake)
+
+    assert list(comparison.index) == [
+        "Geneva (the features now)",
+        "lake point instead of Geneva",
+        "Geneva + the lake's south-west wind",
+    ]
+    geneva, instead = comparison.iloc[0], comparison.iloc[1]
+    assert instead["validation MAE (decides)"] == pytest.approx(geneva["validation MAE (decides)"])
+    assert instead["test MAE"] == pytest.approx(geneva["test MAE"])
+    # The difference of "lake instead" to Geneva is 0 on every window that has days,
+    # also on the validation year, which decides.
+    rows_instead = differences[differences.index.str.startswith("lake point instead of Geneva")]
+    assert "lake point instead of Geneva - Geneva, validation year, all days (decides)" in rows_instead.index
+    assert rows_instead["diff"].dropna().abs().max() == pytest.approx(0)
+
+
+def test_each_lake_version_gets_its_own_weather_on_the_same_days(small, monkeypatch):
+    rows, _ = small
+    monkeypatch.setattr(train, "ALPHAS", (0.1,))
+    # Lake weather that differs from Geneva's in every value (random, so it also gives
+    # other forecasts; a constant shift would not, the scaler removes it), and one
+    # validation day without it (review of 26.11.2026: with the same weather at both
+    # points, a version that quietly kept Geneva's weather passed every test).
+    random = np.random.default_rng(1).normal(0, 1, (len(rows), len(features.WEATHER_FEATURES)))
+    lake = pd.DataFrame(random, index=rows.index, columns=features.WEATHER_FEATURES)
+    missing = rows.index[30]  # 31.12.2024
+    lake.loc[missing] = np.nan
+    # Remember the rows and columns that each version chooses its setting on.
+    given = []
+    real_choose_alpha = train.choose_alpha
+
+    def remember(part, columns):
+        given.append((part.copy(), list(columns)))
+        return real_choose_alpha(part, columns)
+
+    monkeypatch.setattr(train, "choose_alpha", remember)
+
+    comparison, differences = experiments.lake_point_comparison(rows, lake)
+
+    (geneva, geneva_columns), (instead, instead_columns), (added, added_columns) = given
+    weather, water = features.WEATHER_FEATURES, features.WATER_FEATURES + [features.LABEL]
+    kept = rows.drop(missing)
+    # The same days for all three versions: without the day that has no lake weather.
+    for part in (geneva, instead, added):
+        assert part.index.equals(kept.index)
+    assert comparison["test days"].nunique() == 1
+    # Version 1: Geneva's weather. Version 2: the lake's weather, with the same water
+    # features and labels. Version 3: Geneva's weather plus the lake's south-west wind.
+    pd.testing.assert_frame_equal(geneva[weather], kept[weather])
+    pd.testing.assert_frame_equal(instead[weather], lake.drop(missing))
+    pd.testing.assert_frame_equal(instead[water], kept[water])
+    pd.testing.assert_frame_equal(added[weather], kept[weather])
+    extra = ["wind_sw_lake_d0", "wind_sw_lake_d1"]
+    np.testing.assert_array_equal(
+        added[extra].to_numpy(), lake.drop(missing)[["wind_sw_fc_d0", "wind_sw_fc_d1"]].to_numpy()
+    )
+    assert geneva_columns == instead_columns == train.FEATURES_FULL
+    assert added_columns == train.FEATURES_FULL + extra
+    # The deciding row compares the validation forecasts (not the test days): its
+    # difference is the difference of the two validation MAEs, on all validation forecasts.
+    deciding = differences.loc["lake point instead of Geneva - Geneva, validation year, all days (decides)"]
+    validation_mae = comparison["validation MAE (decides)"]
+    assert validation_mae.iloc[1] != pytest.approx(validation_mae.iloc[0])
+    assert deciding["diff"] == pytest.approx(validation_mae.iloc[1] - validation_mae.iloc[0])
+    on_validation = train.walk_forward(kept, train.FEATURES_FULL, 0.1, baselines.validation_days(kept).index)
+    assert deciding["days"] == len(on_validation)
+    # The big-change days of the validation year: their own MAE and difference, with
+    # the events next to the day count (review of 26.11.2026).
+    big = baselines.big_change_days(kept.loc[on_validation.index]).to_numpy()
+    big_row = differences.loc["lake point instead of Geneva - Geneva, validation year, change > 0.8"]
+    assert big_row["days"] == big.sum() > 0
+    assert big_row["events"] == baselines.count_events(on_validation.index[big])
+    big_mae = comparison["validation change > 0.8 MAE"]
+    assert big_row["diff"] == pytest.approx(big_mae.iloc[1] - big_mae.iloc[0])
+    geneva_errors = (on_validation - kept.loc[on_validation.index, features.LABEL]).abs()
+    assert big_mae.iloc[0] == pytest.approx(geneva_errors[big].mean())
+    # The test days are reported in the same way, as the difference of the test MAEs.
+    on_test = differences.loc["lake point instead of Geneva - Geneva, test days, all days"]
+    assert on_test["diff"] == pytest.approx(comparison["test MAE"].iloc[1] - comparison["test MAE"].iloc[0])
+
+
+def test_the_lake_forecast_is_turned_into_the_same_weather_features(monkeypatch):
+    # A fake answer of the Previous Runs API for two Swiss days (UTC hours, winter).
+    hours = pd.date_range("2025-01-14 23:00", periods=48, freq="h", tz="UTC")
+    answer = {"time": hours.strftime("%Y-%m-%dT%H:%M").tolist()}
+    for column, value in ((features.TEMPERATURE, 4.0), (features.SUNSHINE, 1800.0), (features.WIND_SPEED, 10.0), (features.WIND_DIRECTION, 225.0)):
+        answer[column] = [value] * 48
+    asked = []
+
+    def fake_fetch(start, end, latitude, longitude, cell_selection=None):
+        asked.append((latitude, longitude, cell_selection))
+        return answer
+
+    monkeypatch.setattr(experiments.ingest_weather_runs, "fetch", fake_fetch)
+
+    lake = experiments.lake_weather(pd.Timestamp("2025-01-15").date(), pd.Timestamp("2025-01-16").date())
+
+    # The lake point was asked for, not Geneva, with the grid cell over the water ...
+    assert asked == [(experiments.location.LAKE_LATITUDE, experiments.location.LAKE_LONGITUDE, "nearest")]
+    # ... and the shared weather features come out: wind from the south-west, 10 km/h.
+    assert lake.loc[pd.Timestamp("2025-01-15"), "air_temp_fc_d1"] == pytest.approx(4.0)
+    assert lake.loc[pd.Timestamp("2025-01-15"), "wind_sw_fc_d0"] == pytest.approx(10.0)

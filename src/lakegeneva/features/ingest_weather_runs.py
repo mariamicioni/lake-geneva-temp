@@ -46,17 +46,34 @@ COLUMNS = [variable + SUFFIX for variable in VARIABLES]
 USER_AGENT = "lake-geneva-temp (student project, github.com/mariamicioni/lake-geneva-temp)"
 
 
-def fetch(start: dt.date, end: dt.date) -> dict:
-    """Return the hourly 48-hour-old forecast from start to end (both days included)."""
+def fetch(
+    start: dt.date,
+    end: dt.date,
+    latitude: float = LATITUDE,
+    longitude: float = LONGITUDE,
+    cell_selection: str | None = None,
+) -> dict:
+    """Return the hourly 48-hour-old forecast from start to end (both days included).
+
+    latitude, longitude: the point; Geneva unless another one is given (the daily job
+    always uses Geneva; experiments.py compares a point on the lake, review point B2).
+    cell_selection: how the API picks the grid cell of the point (None: the API's
+    default, as in the daily job; "nearest" for the lake point, see location.py).
+    """
     # REST API: everything we want is in the URL.
     # timezone=GMT: the times come back in UTC, like the water readings. (With
     # timezone=Europe/Zurich, Open-Meteo shifts ALL hours by the offset that is valid
     # at the moment of the request - +1 h in winter even for summer days, checked on
     # 27.10.2026.) features.py converts UTC to Swiss time, with summer time.
     url = (
-        f"{API_URL}?latitude={LATITUDE}&longitude={LONGITUDE}"
+        f"{API_URL}?latitude={latitude}&longitude={longitude}"
         f"&hourly={','.join(COLUMNS)}&start_date={start}&end_date={end}&timezone=GMT"
     )
+    # Only when asked for, so the URL of the daily job stays exactly as before. Without
+    # it the API prefers a cell on land with a similar height ("land"), which is right
+    # for Geneva but gives a cell on the shore for a point on the lake.
+    if cell_selection is not None:
+        url += f"&cell_selection={cell_selection}"
     # Try a few times in case the API is briefly unavailable.
     for attempt in range(1, 4):  # attempts 1, 2 and 3
         try:
