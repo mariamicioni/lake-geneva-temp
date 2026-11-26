@@ -110,9 +110,13 @@ def newest_rows(table: pd.DataFrame) -> pd.DataFrame:
 
 def validation_summary(rows: pd.DataFrame, columns: list[str], alpha: float) -> dict:
     """The procedure, persistence and row 3 on the validation days, and a fingerprint of those days."""
-    # The validation days: the rows whose label is known at 18:00 on the first test
-    # day (up to 19.01.2025), as in train.choose_alpha. Only these labels are read.
-    validation_days = train.known_at_18(rows, baselines.TEST_START).index
+    # The validation days: the validation year from baselines.VALIDATION_START up to the
+    # rows whose label is known at 18:00 on the first test day (19.01.2025), exactly as
+    # in train.choose_alpha (the same function). Only these labels are read. Before, it
+    # was every complete row before the test days: the same today, but after a longer
+    # backfill G1 would have judged other days than the validation year (found in a
+    # review on 26.11.2026: on a test table it passed over 1,755 days and failed on 365).
+    validation_days = baselines.validation_days(rows).index
     # The walk-forward test of the procedure: a new model for every validation day,
     # trained on the rows up to two days before it (the same as in choose_alpha).
     forecast = train.walk_forward(rows, columns, alpha, validation_days)

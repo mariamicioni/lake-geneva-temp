@@ -89,6 +89,32 @@ def test_the_validation_days_end_before_the_test_period(rows):
     assert summary["validation_days"] > 0
 
 
+def test_the_gate_and_the_alpha_choice_score_the_same_validation_days(monkeypatch):
+    monkeypatch.setattr(train, "MIN_TRAIN_ROWS", 20)
+    monkeypatch.setattr(train, "ALPHAS", (1.0,))
+    # A table that starts before the validation year (21.01.2024), as after a longer
+    # backfill. Before, the gate judged every earlier row and choose_alpha too (review
+    # of 26.11.2026: G1 passed over 1,755 days and failed on the 365 of the validation year).
+    rows = fake_rows(470, start="2023-11-01")
+    scored = []
+    real_walk_forward = train.walk_forward
+
+    def remember_the_days(rows, columns, alpha, days, **kwargs):
+        scored.append(pd.DatetimeIndex(days))
+        return real_walk_forward(rows, columns, alpha, days, **kwargs)
+
+    monkeypatch.setattr(train, "walk_forward", remember_the_days)
+
+    train.choose_alpha(rows, features.FEATURES)
+    summary = gate.validation_summary(rows, features.FEATURES, 1.0)
+
+    # The same days for both, and only the validation year.
+    alpha_days, gate_days = scored
+    assert gate_days.equals(alpha_days)
+    assert gate_days.min() == baselines.VALIDATION_START
+    assert summary["validation_first"] == baselines.VALIDATION_START.date().isoformat()
+
+
 # --- G1: better than the free forecasts ---------------------------------------------
 
 

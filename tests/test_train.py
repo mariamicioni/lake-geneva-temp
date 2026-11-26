@@ -159,6 +159,31 @@ def test_the_setting_uses_only_labels_known_at_the_first_test_forecast(monkeypat
     assert train.choose_alpha(changed, features.FEATURES)[1] != errors
 
 
+def test_only_the_validation_year_chooses_the_setting(monkeypatch):
+    monkeypatch.setattr(train, "MIN_TRAIN_ROWS", 20)
+    monkeypatch.setattr(train, "ALPHAS", (0.1, 1000.0))
+    # A table that starts before the validation year (21.01.2024), as after a longer
+    # backfill: the earlier rows may still train, but only the validation year is
+    # scored, as for the target baseline (review of 26.11.2026).
+    rows = fake_rows(200, start="2023-11-01")
+    scored = []
+    real_walk_forward = train.walk_forward
+
+    def remember_the_days(rows, columns, alpha, days, **kwargs):
+        scored.append(pd.DatetimeIndex(days))
+        return real_walk_forward(rows, columns, alpha, days, **kwargs)
+
+    monkeypatch.setattr(train, "walk_forward", remember_the_days)
+
+    train.choose_alpha(rows, features.FEATURES)
+
+    # One walk-forward test per alpha, each on the validation year only.
+    assert len(scored) == 2
+    for days in scored:
+        assert days.equals(baselines.validation_days(rows).index)
+        assert days.min() == baselines.VALIDATION_START
+
+
 def test_choosing_alpha_stops_when_no_validation_day_can_be_scored():
     # A table that starts 11 days before TEST_START: no validation day has 90 earlier
     # rows, so every validation error is empty. Before the fix, choose_alpha quietly

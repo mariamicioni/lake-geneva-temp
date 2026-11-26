@@ -151,7 +151,12 @@ def choose_alpha(rows: pd.DataFrame, columns: list[str]) -> tuple[float, dict]:
     # The row of TEST_START - 1 (20.01.2025) is left out: its label is the mean of the
     # first test day itself, which is not over at 18:00 (found in a review on
     # 14.11.2026; alpha stayed 1000 for both models). The test days never count either.
-    validation_days = known_at_18(rows, baselines.TEST_START).index
+    # And only the validation year counts, from baselines.VALIDATION_START: the same
+    # days as the target baseline (baselines.validation_days). Rows before it may still
+    # train the models. Before, every complete row before the test days was scored: the
+    # same today (the table starts on 20.01.2024), but after a longer backfill the
+    # validation year would have grown without a word (found in a review on 26.11.2026).
+    validation_days = baselines.validation_days(rows).index
     errors = {alpha: mae(rows, walk_forward(rows, columns, alpha, validation_days)) for alpha in ALPHAS}
     # If no validation day has MIN_TRAIN_ROWS earlier rows, no day gets a forecast and
     # every error is empty (NaN). min() below would then quietly return the first alpha
