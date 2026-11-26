@@ -78,7 +78,7 @@ def fetch(start: dt.date, end: dt.date) -> dict[int, dict[str, float]]:
             # JSON; KeyError: the answer has no "payload".
             if attempt == 3:
                 raise  # third failure: give up and let the job fail visibly
-            print(f"Attempt {attempt} failed ({error}), retrying in 60 s")
+            print(f"Attempt {attempt} failed ({error}), retrying in 60 s", flush=True)
             time.sleep(60)
 
     # The API sends one item per (time, parameter), e.g.
@@ -125,7 +125,7 @@ def fetch_bafu(start: dt.date, end: dt.date) -> dict[int, dict[str, float]]:
         except (OSError, ValueError, KeyError, TypeError) as error:
             if attempt == 3:
                 raise  # third failure: give up and let the job fail visibly
-            print(f"BAFU attempt {attempt} failed ({error}), retrying in 60 s")
+            print(f"BAFU attempt {attempt} failed ({error}), retrying in 60 s", flush=True)
             time.sleep(60)
 
     # One row per (time, parameter), e.g.
@@ -152,7 +152,11 @@ def fetch_bafu_history(start: dt.date, end: dt.date, chunk_days: int = 30) -> di
         # The pieces do not overlap (each one stops where the next one starts), so
         # update() simply adds the new readings to the ones we already have.
         readings.update(fetch_bafu(piece_start, piece_end))
-        print(f"Downloaded {piece_start} to {piece_end}: {len(readings)} readings so far")
+        # flush=True: the line appears at once. Without it, Python keeps the output in
+        # a buffer when it does not go straight to a terminal (Git Bash on Windows, a
+        # pipe, a log file), and a backfill from 2016 looked silent for 10 minutes (MS2
+        # review point B4). Every print of the download scripts flushes for this reason.
+        print(f"Downloaded {piece_start} to {piece_end}: {len(readings)} readings so far", flush=True)
         piece_start = piece_end
         time.sleep(1)  # a short pause between requests, to be polite to the API
     return readings
@@ -214,7 +218,7 @@ def main() -> None:
         except (OSError, ValueError, KeyError, TypeError) as error:
             # BAFU failed 3 times or sent nothing: take the same readings from existenz.ch.
             # The message shows up in the GitHub log, so we know which source was used.
-            print(f"BAFU Data Platform failed ({error}), using existenz.ch instead")
+            print(f"BAFU Data Platform failed ({error}), using existenz.ch instead", flush=True)
             readings = fetch(start, end)
         # One file per run, named after the download day, e.g. water_2606_fetched_2026-10-20.csv
         path = Path(args.out) / f"water_{STATION}_fetched_{today}.csv"
@@ -225,7 +229,7 @@ def main() -> None:
     # A second run with the same file name gets its own file (see common/raw_files.py).
     path = raw_files.new_path(path)
     write_csv(readings, path)
-    print(f"Saved {len(readings)} readings to {path}")
+    print(f"Saved {len(readings)} readings to {path}", flush=True)
 
 
 # Runs main() only when the file is started as a script, not when it is imported

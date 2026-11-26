@@ -74,14 +74,14 @@ def fetch_run(day: dt.date) -> dict | None:
                 return None
             if attempt == 3:
                 raise  # another error code three times: let the job fail visibly
-            print(f"Attempt {attempt} for {day} failed ({error}), retrying in 60 s")
+            print(f"Attempt {attempt} for {day} failed ({error}), retrying in 60 s", flush=True)
             time.sleep(60)
         except (OSError, ValueError, KeyError) as error:
             # OSError: network problem or timeout; ValueError: invalid JSON;
             # KeyError: the answer has no "hourly" part.
             if attempt == 3:
                 raise
-            print(f"Attempt {attempt} for {day} failed ({error}), retrying in 60 s")
+            print(f"Attempt {attempt} for {day} failed ({error}), retrying in 60 s", flush=True)
             time.sleep(60)
 
 
@@ -145,9 +145,9 @@ def main() -> None:
         day += dt.timedelta(days=1)
         time.sleep(0.2)  # a short pause between requests, to be polite to the API
     if skipped:
-        print(f"No 06:00 UTC run in the archive for {len(skipped)} day(s): {', '.join(skipped)}")
+        print(f"No 06:00 UTC run in the archive for {len(skipped)} day(s): {', '.join(skipped)}", flush=True)
     if empty:
-        print(f"The API answered without any value for {len(empty)} day(s): {', '.join(empty)}")
+        print(f"The API answered without any value for {len(empty)} day(s): {', '.join(empty)}", flush=True)
     if not runs:
         # SystemExit stops the script with an error, so the GitHub job turns red.
         raise SystemExit("The API returned no run with values.")
@@ -156,7 +156,7 @@ def main() -> None:
     # A second run with the same range gets its own file (see common/raw_files.py).
     path = raw_files.new_path(Path(args.out) / f"weather_geneva_single06_{start}_to_{end}.csv")
     write_csv(runs, now, path)
-    print(f"Saved {len(runs)} runs ({min(runs)} to {max(runs)}) to {path}")
+    print(f"Saved {len(runs)} runs ({min(runs)} to {max(runs)}) to {path}", flush=True)
 
 
 # Runs main() only when the file is started as a script, not when it is imported

@@ -88,7 +88,7 @@ def fetch(
             # KeyError: the answer has no "hourly" part.
             if attempt == 3:
                 raise  # third failure: give up and let the job fail visibly
-            print(f"Attempt {attempt} failed ({error}), retrying in 60 s")
+            print(f"Attempt {attempt} failed ({error}), retrying in 60 s", flush=True)
             time.sleep(60)
 
 
@@ -136,7 +136,7 @@ def main() -> None:
     # A second run with the same range gets its own file (see common/raw_files.py).
     path = raw_files.new_path(Path(args.out) / f"weather_geneva_prev2_{start}_to_{end}.csv")
     write_csv(hourly, now, path)
-    print(f"Saved {len(hourly['time'])} forecast hours ({start} to {end}) to {path}")
+    print(f"Saved {len(hourly['time'])} forecast hours ({start} to {end}) to {path}", flush=True)
 
 
 # Runs main() only when the file is started as a script, not when it is imported

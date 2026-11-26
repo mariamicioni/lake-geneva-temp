@@ -198,3 +198,33 @@ def test_main_backfill_covers_whole_swiss_days(monkeypatch, tmp_path):
     # The file is named after the requested range, in the same format as the daily files.
     path = tmp_path / "water_2606_10min_2024-01-20_to_2024-01-21.csv"
     assert path.read_text().splitlines() == ["time_utc,water_temp_c,flow_m3s", "2025-10-09T08:53:20+00:00,18.5,250.0"]
+
+
+def test_every_download_script_shows_its_lines_at_once():
+    # MS2 review point B4: a backfill from 2016 looked silent for 10 minutes, because
+    # Python keeps printed lines in a buffer when the output does not go straight to a
+    # terminal. Every print() of the download scripts must say flush=True.
+    import ast
+    from pathlib import Path
+
+    folder = Path(ingest_water.__file__).parent
+    scripts = sorted(folder.glob("ingest_*.py"))
+    assert len(scripts) == 5
+    for script in scripts:
+        for node in ast.walk(ast.parse(script.read_text(encoding="utf-8"))):
+            if isinstance(node, ast.Call) and getattr(node.func, "id", None) == "print":
+                flush = [k for k in node.keywords if k.arg == "flush"]
+                assert flush and getattr(flush[0].value, "value", None) is True, f"{script.name}, line {node.lineno}"
+
+
+def test_the_backfill_prints_one_line_per_piece_at_once(monkeypatch):
+    # Two pieces of 30 days, without the internet and without the pause.
+    monkeypatch.setattr(ingest_water, "fetch_bafu", lambda start, end: {})
+    monkeypatch.setattr(ingest_water.time, "sleep", lambda seconds: None)
+    printed = []
+    monkeypatch.setattr("builtins.print", lambda *args, **kwargs: printed.append((args, kwargs)))
+
+    ingest_water.fetch_bafu_history(dt.date(2016, 1, 1), dt.date(2016, 3, 1))
+
+    assert [args[0][:10] for args, _ in printed] == ["Downloaded", "Downloaded"]
+    assert all(kwargs.get("flush") is True for _, kwargs in printed)

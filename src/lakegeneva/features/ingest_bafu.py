@@ -94,7 +94,7 @@ def fetch(start: dt.date, end: dt.date) -> dict[dt.date, dict[str, float]]:
             # GraphQL error; KeyError/TypeError: the answer has an unexpected shape.
             if attempt == 3:
                 raise  # third failure: give up and let the job fail visibly
-            print(f"Attempt {attempt} failed ({error}), retrying in 60 s")
+            print(f"Attempt {attempt} failed ({error}), retrying in 60 s", flush=True)
             time.sleep(60)
 
     # The API sends one row per (day, parameter), in no particular order, e.g.
@@ -148,7 +148,7 @@ def main() -> None:
     # A second run with the same range gets its own file (see common/raw_files.py).
     path = raw_files.new_path(Path(args.out) / f"bafu_{STATION}_daily_{start}_to_{end}.csv")
     write_csv(days, path)
-    print(f"Saved {len(days)} days ({min(days)} to {max(days)}) to {path}")
+    print(f"Saved {len(days)} days ({min(days)} to {max(days)}) to {path}", flush=True)
 
 
 # Runs main() only when the file is started as a script, not when it is imported

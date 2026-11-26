@@ -59,7 +59,7 @@ def fetch() -> dict:
             # KeyError: the answer has no "hourly" part.
             if attempt == 3:
                 raise  # third failure: give up and let the job fail visibly
-            print(f"Attempt {attempt} failed ({error}), retrying in 60 s")
+            print(f"Attempt {attempt} failed ({error}), retrying in 60 s", flush=True)
             time.sleep(60)
 
 
@@ -87,7 +87,7 @@ def main() -> None:
         # One row per forecast hour (3 days x 24 hours = 72 rows), in UTC.
         for i, time_utc in enumerate(hourly["time"]):
             writer.writerow([now.isoformat(timespec="seconds"), time_utc, *(hourly[v][i] for v in VARIABLES)])
-    print(f"Saved {len(hourly['time'])} forecast hours to {path}")
+    print(f"Saved {len(hourly['time'])} forecast hours to {path}", flush=True)
 
 
 # Runs main() only when the file is started as a script, not when it is imported.
