@@ -259,6 +259,30 @@ def test_g5_needs_the_row_of_the_issue_day_and_a_fresh_label():
     assert not gate.check_fresh_data(pd.NaT, table, monday)[0]
 
 
+def test_g5_refuses_a_label_of_a_day_that_is_not_over():
+    days = pd.date_range(end="2026-11-15", periods=3, freq="D", name="date")
+    table = pd.DataFrame(1.0, index=days, columns=features.FEATURES)
+    table["n_readings_d0"] = 108
+    monday = dt.datetime(2026, 11, 16, 6, 0, tzinfo=dt.timezone.utc)  # 07:00 in Switzerland
+
+    # Saturday's label is the mean of Sunday, which is over: yes (2 days old).
+    assert gate.check_fresh_data(pd.Timestamp("2026-11-14"), table, monday)[0]
+    # Sunday's label would be the mean of Monday, which is not over at 07:00: no
+    # (review of 27.11.2026: this passed before).
+    passed, text = gate.check_fresh_data(pd.Timestamp("2026-11-15"), table, monday)
+    assert not passed and "not over yet" in text
+    # A label from the future: no.
+    passed, text = gate.check_fresh_data(pd.Timestamp("2026-11-17"), table, monday)
+    assert not passed and "not over yet" in text
+    # The same rule as the table (features.label_ready): Sunday's label exists from the
+    # last slot of Monday, 23:50 Swiss time = 22:50 UTC in winter. At 23:49 not yet, at
+    # 23:50 yes (review of 27.11.2026: a first rule waited until midnight).
+    sunday = pd.Timestamp("2026-11-15")
+    assert not gate.check_fresh_data(sunday, table, dt.datetime(2026, 11, 16, 22, 49, tzinfo=dt.timezone.utc))[0]
+    passed, text = gate.check_fresh_data(sunday, table, dt.datetime(2026, 11, 16, 22, 50, tzinfo=dt.timezone.utc))
+    assert passed, text
+
+
 # --- The newest rows and the final decision -------------------------------------------
 
 

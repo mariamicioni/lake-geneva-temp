@@ -225,11 +225,24 @@ def check_fresh_data(last_label: pd.Timestamp, table: pd.DataFrame, time: dt.dat
     # The same check as check_fresh.py at the end of the feature pipeline (MS2 review
     # point A2): the row of the issue day D, for the evening S of the newest daily job
     # that was due (19:00 UTC). Before, it was "the newest row with all features at most
-    # 2 days old". On Monday (until 19:00 UTC) S is Sunday, and D is Sunday or, if BAFU
-    # was late, Saturday.
+    # 2 days old". On Monday (until 19:00 UTC) S is Sunday, and D is Sunday or, if
+    # Sunday had too few readings before 18:00 when its job ran, Saturday.
     passed, _, text = check_fresh.check_issue_day(table, check_fresh.service_day(time))
     if not passed:
         return False, f"failed: {text}"
+    # A label is the mean of the NEXT day, so it can only exist once that day has reached
+    # its last 10-minute slot (23:50 Swiss time): the same rule as in features.py, from
+    # the same function. A younger label means a broken table, and a model trained on it
+    # would have learned from the future (review of 27.11.2026: on a Monday morning, a
+    # label on Sunday's row passed, and so did a label from the future). The feature code
+    # never writes such a label, so this only stops a broken table before it can become
+    # the champion.
+    ready = features.label_ready(last_label.normalize())
+    if time < ready:
+        return False, (
+            f"failed: the newest label (row of {last_label:%d.%m.%Y}) is the mean of a day that "
+            f"is not over yet (it can exist from {ready:%d.%m.%Y %H:%M} Swiss time)"
+        )
     label_age = (time.astimezone(ZoneInfo(features.TIMEZONE)).date() - last_label.date()).days
     if label_age > MAX_LABEL_AGE_DAYS:
         return False, f"failed: the newest label is {label_age} days old (allowed: {MAX_LABEL_AGE_DAYS})"

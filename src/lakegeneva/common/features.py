@@ -167,12 +167,21 @@ def water_features(readings: pd.DataFrame) -> pd.DataFrame:
     # Tomorrow is over when the data reaches its last 10-minute slot (23:50 Swiss
     # time) or later. Counting the readings alone is not enough: the job of 27.10.2026
     # started at 23:52 and already had 126 readings of a day that was not over yet.
-    # table.index + 2 days = 00:00 at the end of tomorrow; tz_localize puts it on the
-    # Swiss clock (00:00 always exists, the clocks change at 02:00 or 03:00).
-    end_of_tomorrow = (table.index + pd.Timedelta(days=2)).tz_localize(TIMEZONE)
-    tomorrow_over = end_of_tomorrow - pd.Timedelta(minutes=10) <= local.max()
+    # label_ready() gives that moment for every row; the gate (G5) uses the same rule.
+    tomorrow_over = label_ready(table.index) <= local.max()
     table[LABEL] = tomorrow_mean.where((table["n_readings_d1"] >= MIN_READINGS_LABEL) & tomorrow_over)
     return table
+
+
+def label_ready(days):
+    """The moment the label of these rows can exist: the last 10-minute slot (23:50 Swiss time) of the next day."""
+    # days: a DatetimeIndex or one Timestamp of rows (dates at midnight, no time zone).
+    # days + 2 days = 00:00 at the end of tomorrow; tz_localize puts it on the Swiss
+    # clock (00:00 always exists, the clocks change at 02:00 or 03:00); minus 10 minutes
+    # is the last slot of tomorrow. One function for the table and for the gate, so the
+    # two can never disagree (review of 27.11.2026: G5 refused a correct label for the
+    # 10 minutes between 23:50 and midnight).
+    return (days + pd.Timedelta(days=2)).tz_localize(TIMEZONE) - pd.Timedelta(minutes=10)
 
 
 def load_weather(raw_dir: Path | str = "data/raw") -> pd.DataFrame:
