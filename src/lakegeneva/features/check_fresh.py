@@ -13,6 +13,7 @@ issue day D for S is the newest day up to S whose readings before 18:00 are comp
 
     python -m lakegeneva.features.check_fresh                            # S from the clock
     python -m lakegeneva.features.check_fresh --service-day 2026-11-25   # S given
+    python -m lakegeneva.features.check_fresh --require-on-time          # only D = S passes
 
 S from the clock is the evening of the newest scheduled start, so a run started by
 hand or again the next day checks the current evening, with the data it downloaded
@@ -151,6 +152,11 @@ def main() -> None:
     parser.add_argument(
         "--service-day", type=dt.date.fromisoformat, help="the service evening S, YYYY-MM-DD (default: from the clock)"
     )
+    # Only D = S passes: the question of the catch-up run (feature-pipeline.yml, MS2
+    # review point E4) and later of the live forecast in MS4, which needs the row of S.
+    parser.add_argument(
+        "--require-on-time", action="store_true", help="fail also when D is the day before S (delayed)"
+    )
     args = parser.parse_args()
 
     service = args.service_day or service_day(dt.datetime.now(dt.UTC))
@@ -160,6 +166,8 @@ def main() -> None:
     # SystemExit with a text: Python prints it and the exit code says that the run failed.
     if not passed:
         raise SystemExit(f"{args.table}: {text}.")
+    if delayed and args.require_on_time:
+        raise SystemExit(f"{args.table}: not on time ({text}).")
     # On GitHub, a line in this form becomes a yellow warning in the summary of the run,
     # without failing it (GitHub Actions "workflow commands").
     if delayed and os.environ.get("GITHUB_ACTIONS") == "true":

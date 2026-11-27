@@ -8,6 +8,8 @@
 #   4. stores everything in the bucket (dvc push) and
 #   5. commits the two small pointer files, so every day is one data version in Git,
 #   6. checks that the new table is not too old (otherwise the job turns red).
+# It runs every evening, and a catch-up run later in the night does all this again
+# only if the evening was not on time (job "catchup", MS2 review point E4).
 name: Feature pipeline
 
 on:
@@ -19,7 +21,20 @@ on:
     # harm, because every run rebuilds the table from time-stamped data and the
     # 18:00 cutoff is in the code.
     - cron: "0 19 * * *"
+    # The catch-up run (MS2 review point E4), later in the night: 03:00 UTC = 04:00
+    # Swiss winter time, 05:00 summer time. On 6 of 16 evenings (11.-26.11.2026) the
+    # evening run came before BAFU had the readings of the day, so the row of the
+    # evening S was not ready (D = S-1, "delayed"). The job "catchup" below first asks
+    # whether the stored table is already on time for S; only if not, the pipeline
+    # runs again. So a night with an on-time evening run gets no second data version.
+    - cron: "0 3 * * *"
   workflow_dispatch:        # allows a manual run from the Actions tab
+    inputs:
+      catch_up:
+        # A manual catch-up run: the same check first, like the 03:00 UTC run.
+        description: "Run as the catch-up run (the pipeline runs only if the last evening is not on time yet)"
+        type: boolean
+        default: false
 
 # Never two runs at the same time: a second run waits until the first one is done,
 # so two runs can never push two different data versions over each other.
@@ -32,7 +47,55 @@ permissions:
   contents: write
 
 jobs:
+  # Only in the catch-up run (03:00 UTC, or by hand with catch_up): is the stored
+  # table already on time for the last evening S? It gets only the table (dvc pull of
+  # data/features.dvc, a few seconds) and asks check_fresh --require-on-time. The
+  # answer goes to the job "features" as the output "needed".
+  catchup:
+    if: github.event.schedule == '0 3 * * *' || inputs.catch_up
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      needed: ${{ steps.check.outputs.needed }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.2.0
+        with:
+          enable-cache: true
+      - name: Install the exact versions from uv.lock
+        run: uv sync --locked --no-dev
+      - name: Install DVC
+        run: uv tool install "dvc[gs]==3.67.1"
+      # The same key as in the job below (written to the machine's temp folder only).
+      - name: Give DVC the bucket key
+        env:
+          GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }}
+        run: |
+          printf '%s' "$GCP_SA_KEY" > "$RUNNER_TEMP/gcp-key.json"
+          dvc remote modify --local storage credentialpath "$RUNNER_TEMP/gcp-key.json"
+      - name: Get the stored feature table from the bucket
+        run: dvc pull data/features.dvc
+      # On time: nothing to do (needed=false). Delayed, missing or broken: the
+      # pipeline runs again (needed=true). A failing check inside `if` does not stop
+      # the step, it only chooses the branch.
+      - name: Is the last evening already on time?
+        id: check
+        run: |
+          if uv run --locked --no-dev python -m lakegeneva.features.check_fresh --require-on-time; then
+            echo "needed=false" >> "$GITHUB_OUTPUT"
+            echo "The last evening is on time: the catch-up run has nothing to do."
+          else
+            echo "needed=true" >> "$GITHUB_OUTPUT"
+            echo "::notice title=Catch-up run::the last evening is not on time yet, so the pipeline runs again."
+          fi
+
   features:
+    # After the catch-up check. The evening run (and a manual run without catch_up)
+    # skips that check, so this job runs. The catch-up run: only if the check says
+    # "needed", or if the check itself failed (then this job shows the problem).
+    # !cancelled(): without it, a skipped check would skip this job too.
+    needs: catchup
+    if: ${{ !cancelled() && (needs.catchup.result == 'skipped' || needs.catchup.outputs.needed == 'true' || needs.catchup.result == 'failure') }}
     runs-on: ubuntu-latest  # a fresh Linux machine from GitHub, deleted after the run
     timeout-minutes: 30     # stop a hanging run (each download retry waits 60 s)
     steps:

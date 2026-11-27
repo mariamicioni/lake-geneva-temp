@@ -128,3 +128,34 @@ def test_the_data_version_is_named_and_tagged_after_its_issue_day():
     assert built < rebase < tag < push
     # No separate tag push that could fail after main was already pushed.
     assert 'git push origin "refs/tags/' not in step
+
+
+def test_a_catch_up_run_later_in_the_night_runs_only_if_the_evening_is_not_on_time():
+    # MS2 review point E4: a second run against late data. On 6 of 16 evenings
+    # (11.-26.11.2026) the evening run came before BAFU had the readings of the day.
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    # Two schedules: the evening run and the catch-up run later in the night.
+    assert 'cron: "0 19 * * *"' in workflow and 'cron: "0 3 * * *"' in workflow
+    # The catch-up check runs only for the 03:00 UTC schedule or a manual catch-up run.
+    check = workflow[workflow.index("  catchup:") : workflow.index("  features:")]
+    assert "if: github.event.schedule == '0 3 * * *' || inputs.catch_up" in check
+    # It gets only the table (not the raw files) and asks whether the evening is on time.
+    assert "run: dvc pull data/features.dvc" in check
+    assert "check_fresh --require-on-time" in check
+    assert 'echo "needed=false"' in check and 'echo "needed=true"' in check
+    assert "needed: ${{ steps.check.outputs.needed }}" in check
+    # The pipeline job waits for the check and runs if the check was skipped (the
+    # evening run), if it says "needed", or if it failed. Never when it says "on time".
+    job = workflow[workflow.index("  features:") :]
+    job = job[: job.index("steps:")]
+    assert "needs: catchup" in job
+    condition = next(line for line in job.splitlines() if line.strip().startswith("if:"))
+    for part in (
+        "!cancelled()",
+        "needs.catchup.result == 'skipped'",
+        "needs.catchup.outputs.needed == 'true'",
+        "needs.catchup.result == 'failure'",
+    ):
+        assert part in condition
+    # A manual run can be a catch-up run too (to try it), off by default.
+    assert "catch_up:" in workflow and "type: boolean" in workflow and "default: false" in workflow

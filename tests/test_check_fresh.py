@@ -157,6 +157,18 @@ def test_main_shows_a_warning_on_github_when_the_issue_day_is_late(monkeypatch, 
     assert out.startswith("delayed") and "::warning" not in out
 
 
+def test_require_on_time_lets_only_the_row_of_s_pass(monkeypatch, tmp_path, capsys):
+    # The question of the catch-up run (MS2 review point E4): is the evening on time?
+    monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
+    run_main(monkeypatch, tmp_path, table_until("2026-11-25"), "--service-day", "2026-11-25", "--require-on-time")
+    assert capsys.readouterr().out.startswith("on time")
+    # One day late: without the option green, with it red, with the reason.
+    late = table_until("2026-11-25", readings=(108, 108, 78))
+    with pytest.raises(SystemExit) as stop:
+        run_main(monkeypatch, tmp_path, late, "--service-day", "2026-11-25", "--require-on-time")
+    assert "not on time" in str(stop.value.code) and "only 78 of the 90" in str(stop.value.code)
+
+
 def test_main_fails_with_the_reason(monkeypatch, tmp_path):
     # The exit code says that the run failed; the text says why.
     with pytest.raises(SystemExit) as stop:
