@@ -167,6 +167,10 @@ With Docker, no key and no data needed: the image runs the whole pipeline with t
 docker build -t lake-geneva-features .
 docker run --rm lake-geneva-features
 ```
+The same without internet, on saved API answers (what CI runs on every push, MS2 review point A3): `LAKEGENEVA_REPLAY` makes `src/lakegeneva/common/web.py` read one saved answer per API from `tests/fixtures/replay/` (recorded on 27.11.2026, see the README there), and `--network none` switches the internet off. It prints `issue day D: 2026-11-26`:
+```bash
+docker run --rm --network none -e LAKEGENEVA_REPLAY=/replay -v "$PWD/tests/fixtures/replay:/replay:ro" lake-geneva-features
+```
 With Docker and the real data (after `dvc pull`): the raw data is mounted read-only and the full table is written to `out/`:
 ```bash
 docker run --rm -v "$PWD/data/raw:/app/data/raw:ro" -v "$PWD/out:/app/data/features" lake-geneva-features python -m lakegeneva.features.build_features
@@ -194,7 +198,7 @@ I build this project on what the MLOps HS26 course teaches. When a file follows 
 
 | File | Based on | What I changed |
 |---|---|---|
-| `.github/workflows/ci.yml` | Block 1 exercise, Part D and the image job of its solution [5] | No training on the real data (the tests train on small fake tables); checks the code with ruff (MS2 review point E5), runs the unit tests, then builds the image without publishing it |
+| `.github/workflows/ci.yml` | Block 1 exercise, Part D and the image job of its solution [5] | No training on the real data (the tests train on small fake tables); checks the code with ruff (MS2 review point E5), runs the unit tests, then builds the image without publishing it and runs the whole pipeline in it on saved API answers, without internet (MS2 review point A3) |
 | `.github/workflows/feature-pipeline.yml` | Block 1 exercise, Parts A (DVC) and D (CI with uv) [5] | Runs on a schedule; pulls and pushes the data with DVC and commits the pointer files |
 | `.github/workflows/retrain.yml` | Block 1 exercise, Parts A (DVC) and D (CI with uv) [5]; weekly policy from the SW09 retrain question [14] | Runs every Monday; pulls only the feature table, stops if it is old, trains, logs to MLflow on DagsHub and registers the model (a run on another branch only trains and tests); commits nothing |
 | `.github/workflows/promote.yml` | The same setup as `retrain.yml` [5]; a review of this repository (20.11.2026) found that a retrain could overwrite a rollback made while it ran | Written for this project: one concurrency group with `retrain.yml`, the version passed as an environment variable |
@@ -207,6 +211,7 @@ I build this project on what the MLOps HS26 course teaches. When a file follows 
 | `src/lakegeneva/features/ingest_weather_single.py` | Open-Meteo Single Runs API documentation [9] | Written for this project |
 | `src/lakegeneva/common/features.py` | The features of my proposal (`docs/proposal.pdf`), pandas documentation [7] | Written for this project |
 | `src/lakegeneva/common/raw_files.py` | A review of this repository found that a second download on the same day replaced the first file | Written for this project |
+| `src/lakegeneva/common/web.py`, `tests/fixtures/replay/` | MS2 review point A3: run the image in CI on saved API answers | Written for this project; one saved answer per API, chosen by host and path, so the dates of the requests do not matter |
 | `src/lakegeneva/common/location.py` | A review of this repository found the coordinates repeated in three scripts; the second point on the lake for MS2 review point B2, with the grid cell over the water (Open-Meteo `cell_selection` [16]) | Written for this project |
 | `src/lakegeneva/features/build_features.py` | pandas documentation [7] (Parquet) | Written for this project |
 | `src/lakegeneva/features/check_fresh.py` | A review of this repository found that a source sending old data would keep the job green; MS2 review point A2: check the row of the issue day D instead of an age in days | Written for this project; GitHub's `::warning::` line for a delayed day (GitHub Actions workflow commands [17]) |

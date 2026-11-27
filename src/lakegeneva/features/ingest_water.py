@@ -38,7 +38,7 @@ import time  # time.sleep() to wait before a retry
 import urllib.request  # sends the HTTP request to the API
 from pathlib import Path  # file paths that work on Windows and Linux
 
-from lakegeneva.common import raw_files  # a second run never replaces an earlier file
+from lakegeneva.common import raw_files, web  # a second run never replaces an earlier file; the request (or a saved answer)
 
 # --- Settings -----------------------------------------------------------------
 # Fallback source, existenz.ch: the "daterange" endpoint gives all readings
@@ -69,7 +69,7 @@ def fetch(start: dt.date, end: dt.date) -> dict[int, dict[str, float]]:
     for attempt in range(1, 4):  # attempts 1, 2 and 3
         try:
             request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
-            with urllib.request.urlopen(request, timeout=60) as response:
+            with web.open_url(request, timeout=60) as response:  # the web, or a saved answer (common/web.py)
                 # The readings are in the "payload" list of the JSON answer.
                 payload = json.load(response)["payload"]
             break  # success: leave the retry loop
@@ -115,7 +115,7 @@ def fetch_bafu(start: dt.date, end: dt.date) -> dict[int, dict[str, float]]:
             request = urllib.request.Request(
                 BAFU_API_URL, data=body, headers={"Content-Type": "application/json", "User-Agent": USER_AGENT}
             )
-            with urllib.request.urlopen(request, timeout=60) as response:
+            with web.open_url(request, timeout=60) as response:  # the web, or a saved answer (common/web.py)
                 answer = json.load(response)
             # GraphQL reports problems inside the answer (with HTTP status 200).
             if answer.get("errors"):

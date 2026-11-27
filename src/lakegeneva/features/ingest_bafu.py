@@ -24,7 +24,7 @@ import time  # time.sleep() to wait before a retry
 import urllib.request  # sends the HTTP request to the API
 from pathlib import Path  # file paths that work on Windows and Linux
 
-from lakegeneva.common import raw_files  # a second run never replaces an earlier file
+from lakegeneva.common import raw_files, web  # a second run never replaces an earlier file; the request (or a saved answer)
 
 # --- Settings -----------------------------------------------------------------
 # GraphQL APIs have one single URL; what we want is described in the query text.
@@ -80,7 +80,7 @@ def fetch(start: dt.date, end: dt.date) -> dict[dt.date, dict[str, float]]:
                 API_URL, data=body, headers={"Content-Type": "application/json", "User-Agent": USER_AGENT}
             )
             # timeout=120: a 10-year backfill is one big answer, so allow 2 minutes.
-            with urllib.request.urlopen(request, timeout=120) as response:
+            with web.open_url(request, timeout=120) as response:  # the web, or a saved answer (common/web.py)
                 answer = json.load(response)
             # GraphQL reports problems inside the answer (with HTTP status 200),
             # so we have to check the "errors" field ourselves.

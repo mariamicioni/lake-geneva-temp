@@ -33,7 +33,7 @@ import urllib.error  # HTTPError: the API answered with an error code
 import urllib.request  # sends the HTTP request to the API
 from pathlib import Path  # file paths that work on Windows and Linux
 
-from lakegeneva.common import raw_files  # a second run never replaces an earlier file
+from lakegeneva.common import raw_files, web  # a second run never replaces an earlier file; the request (or a saved answer)
 from lakegeneva.common.location import LATITUDE, LONGITUDE  # the point in Geneva
 
 # --- Settings -----------------------------------------------------------------
@@ -63,7 +63,7 @@ def fetch_run(day: dt.date) -> dict | None:
     for attempt in range(1, 4):  # attempts 1, 2 and 3
         try:
             request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
-            with urllib.request.urlopen(request, timeout=60) as response:
+            with web.open_url(request, timeout=60) as response:  # the web, or a saved answer (common/web.py)
                 # "hourly" holds a "time" list plus one list per variable, all the same length.
                 return json.load(response)["hourly"]
         except urllib.error.HTTPError as error:

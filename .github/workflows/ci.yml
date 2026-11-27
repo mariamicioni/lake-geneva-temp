@@ -78,3 +78,16 @@ jobs:
           docker run --rm lake-geneva-features:ci python -m lakegeneva.features.run_pipeline --help
           docker run --rm lake-geneva-features:ci python -m lakegeneva.features.build_features --help
           docker run --rm lake-geneva-features:ci python -c "import os; print('image version:', os.environ['APP_VERSION'])"
+
+      # The image runs the whole pipeline (its default command, all five steps) on saved
+      # API answers (MS2 review point A3). LAKEGENEVA_REPLAY makes common/web.py read
+      # them from tests/fixtures/replay, mounted read-only, and --network none switches
+      # the internet off. So a change that breaks a download or the table inside the
+      # image fails here, before the nightly job. The saved answers are from 20.-27.11.2026,
+      # so the table must name 26.11 as its issue day. (GitHub's bash uses pipefail: if
+      # docker fails, the step fails although tee does not.)
+      - name: Run the pipeline in the image on saved API answers
+        run: |
+          docker run --rm --network none -e LAKEGENEVA_REPLAY=/replay \
+            -v "$PWD/tests/fixtures/replay:/replay:ro" lake-geneva-features:ci | tee replay.log
+          grep -q "issue day D: 2026-11-26" replay.log
