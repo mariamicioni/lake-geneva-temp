@@ -36,9 +36,10 @@ that step is made. It has two users:
 # says what the model predicts, and tests/test_track.py loads the champion the way
 # MS4 will and checks that the result is a temperature.
 
+from typing import Protocol  # type hint: "anything that has these methods"
+
 import numpy as np  # arrays: the last readings and the predicted changes
 import pandas as pd  # the feature table, and the forecasts with their dates
-from sklearn.pipeline import Pipeline  # type hint: the model (scaling + Ridge, train.make_model)
 
 # The name of the model's output in MLflow (the "signature" of the model: its input
 # columns and its output). With this name the model page itself says that the number
@@ -46,8 +47,22 @@ from sklearn.pipeline import Pipeline  # type hint: the model (scaling + Ridge, 
 MODEL_OUTPUT = "change_degC"
 
 
+class Predictor(Protocol):
+    """Anything with predict(): the scikit-learn pipeline of train.make_model(), or a small fake in a test."""
+
+    # A Protocol only describes what the functions below use (review of 27.11.2026: the
+    # hint "Pipeline" was narrower than the code, which works with any such model).
+    def predict(self, x: pd.DataFrame | np.ndarray) -> np.ndarray: ...
+
+
+class TablePredictor(Predictor, Protocol):
+    """A Predictor that was trained on a table: scikit-learn then keeps its column names in feature_names_in_."""
+
+    feature_names_in_: np.ndarray
+
+
 def temperature(
-    model: Pipeline, x: pd.DataFrame | np.ndarray, water_last: pd.Series | np.ndarray | list[float]
+    model: Predictor, x: pd.DataFrame | np.ndarray, water_last: pd.Series | np.ndarray | list[float]
 ) -> np.ndarray:
     """Tomorrow's mean water temperature (°C): the last reading plus the change the model predicts.
 
@@ -63,7 +78,7 @@ def temperature(
     return np.asarray(water_last, dtype=float) + model.predict(x)
 
 
-def temperature_for_rows(model: Pipeline, rows: pd.DataFrame) -> pd.Series:
+def temperature_for_rows(model: TablePredictor, rows: pd.DataFrame) -> pd.Series:
     """The forecast for rows of the feature table, one per day: what the live forecast calls.
 
     model: a model that was trained on a table (train.train_final), for example the

@@ -45,7 +45,6 @@ from zoneinfo import ZoneInfo  # the Swiss clock
 
 import numpy as np  # np.isfinite on many numbers at once
 import pandas as pd  # the feature table and the forecasts
-from sklearn.pipeline import Pipeline  # type hint: the model (scaling + Ridge, train.make_model)
 
 from lakegeneva.common import baselines, features, forecasting  # shared definitions
 from lakegeneva.features import check_fresh  # the issue-day check of the feature pipeline
@@ -251,7 +250,11 @@ def check_fresh_data(last_label: pd.Timestamp, table: pd.DataFrame, time: dt.dat
 
 
 def run_checks(
-    summary: dict, candidate: Pipeline, champion: dict | None, table: pd.DataFrame, last_label: pd.Timestamp
+    summary: dict,
+    candidate: forecasting.TablePredictor,
+    champion: dict | None,
+    table: pd.DataFrame,
+    last_label: pd.Timestamp,
 ) -> dict:
     """All five checks on the REGISTERED candidate (loaded back from MLflow). Returns check -> text."""
     # candidate: the model as it was loaded back from the registry, so the checks test

@@ -14,7 +14,7 @@
 # information at 18:00 ("tomorrow = the temperature now"), and it is also the
 # better of the two over the whole year (main() prints both).
 
-from collections.abc import Iterable  # type hint: anything a for loop can go through (a list, an index of dates)
+from collections.abc import Iterable, Sequence  # type hints: anything a for loop can go through; a list of numbers
 
 import numpy as np  # random numbers and percentiles for the bootstrap
 import pandas as pd  # the daily table
@@ -141,8 +141,8 @@ def count_events(days: Iterable[pd.Timestamp]) -> int:
 
 
 def bootstrap_mae_difference(
-    errors_a: pd.Series | np.ndarray,
-    errors_b: pd.Series | np.ndarray,
+    errors_a: pd.Series | np.ndarray | Sequence[float],
+    errors_b: pd.Series | np.ndarray | Sequence[float],
     block: int = BLOCK_DAYS,
     seed: int = SEED,
 ) -> tuple[float, float, float]:
