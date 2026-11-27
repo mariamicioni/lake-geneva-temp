@@ -156,7 +156,7 @@ def test_fetch_bafu_history_downloads_in_pieces_without_gaps(monkeypatch):
 
     def fake_fetch_bafu(start, end):
         asked.append((start, end))
-        ts = int(dt.datetime.combine(start, dt.time(), dt.timezone.utc).timestamp())
+        ts = int(dt.datetime.combine(start, dt.time(), dt.UTC).timestamp())
         return {ts: {"temperature": 7.0}}
 
     monkeypatch.setattr(ingest_water, "fetch_bafu", fake_fetch_bafu)

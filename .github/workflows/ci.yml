@@ -34,7 +34,14 @@ jobs:
       - name: Install the exact versions from uv.lock
         run: uv sync --locked   # fails if uv.lock does not match pyproject.toml
 
-      # 4. Run all tests in tests/. -v prints each test name with PASSED/FAILED.
+      # 4. ruff reads the code without running it and finds mistakes (an unused import,
+      #    a name that does not exist) and functions without type hints (MS2 review
+      #    point E5). The rules are in pyproject.toml, and the version is in uv.lock.
+      #    It runs before the tests, because it takes only a second.
+      - name: Check the code with ruff
+        run: uv run ruff check
+
+      # 5. Run all tests in tests/. -v prints each test name with PASSED/FAILED.
       - name: Run the tests
         run: uv run pytest -v
 

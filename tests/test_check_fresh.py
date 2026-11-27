@@ -24,7 +24,7 @@ def table_until(last_day: str, readings=(108, 108, 108)) -> pd.DataFrame:
 
 def utc(text: str) -> dt.datetime:
     """A time in UTC, e.g. utc("2026-11-26 02:05")."""
-    return dt.datetime.fromisoformat(text).replace(tzinfo=dt.timezone.utc)
+    return dt.datetime.fromisoformat(text).replace(tzinfo=dt.UTC)
 
 
 def test_the_service_evening_is_the_newest_scheduled_start_that_has_passed():

@@ -21,11 +21,12 @@ trained again on the earlier days only (walk-forward).
 # The scaler learns its mean and spread from the training rows only.
 
 import argparse  # reads the command-line option --features
+from collections.abc import Iterable  # type hint: anything a for loop can go through (a list, an index of dates)
 
 import numpy as np  # np.ones: the yes/no list of the "all year" window
 import pandas as pd  # the daily feature table
 from sklearn.linear_model import Ridge  # linear regression with a penalty
-from sklearn.pipeline import make_pipeline  # scaling and regression as one model
+from sklearn.pipeline import Pipeline, make_pipeline  # scaling and regression as one model; its type
 from sklearn.preprocessing import StandardScaler  # every feature to mean 0, spread 1
 
 # The shared definitions: the baselines, the features, and the step from the model's
@@ -65,7 +66,7 @@ def known_at_18(rows: pd.DataFrame, day: pd.Timestamp) -> pd.DataFrame:
     return rows[rows.index <= day - pd.Timedelta(days=2)]
 
 
-def make_model(alpha: float):
+def make_model(alpha: float) -> Pipeline:
     """A fresh, untrained model: scale the features, then Ridge regression."""
     return make_pipeline(StandardScaler(), Ridge(alpha=alpha))
 
@@ -81,7 +82,7 @@ def walk_forward(
     rows: pd.DataFrame,
     columns: list[str],
     alpha: float,
-    days,
+    days: Iterable[pd.Timestamp],
     window_days: int | None = None,
     retrain_every: int = 1,
 ) -> pd.Series:
@@ -173,7 +174,7 @@ def choose_alpha(rows: pd.DataFrame, columns: list[str]) -> tuple[float, dict]:
     return min(errors, key=errors.get), errors
 
 
-def check_every_day_forecast(forecast: pd.Series, days) -> None:
+def check_every_day_forecast(forecast: pd.Series, days: Iterable[pd.Timestamp]) -> None:
     """Stop with an error unless every day in `days` has a forecast that is a real number."""
     # Why: the MAE is a mean, and pandas' mean() quietly skips a missing value (NaN).
     # A day without a forecast would then simply not count. In a review on 18.11.2026,
@@ -242,7 +243,7 @@ def evaluate(rows: pd.DataFrame, forecast: pd.Series) -> pd.DataFrame:
     return pd.DataFrame(result).set_index("window")
 
 
-def train_final(rows: pd.DataFrame, columns: list[str], alpha: float):
+def train_final(rows: pd.DataFrame, columns: list[str], alpha: float) -> Pipeline:
     """The model for the live forecast: trained on every row with a known label."""
     # The feature table only has a label once tomorrow is over, so every row here is
     # already known. Trained in the evening of day D, after the feature pipeline, the

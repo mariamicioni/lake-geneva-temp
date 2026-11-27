@@ -38,6 +38,7 @@ that step is made. It has two users:
 
 import numpy as np  # arrays: the last readings and the predicted changes
 import pandas as pd  # the feature table, and the forecasts with their dates
+from sklearn.pipeline import Pipeline  # type hint: the model (scaling + Ridge, train.make_model)
 
 # The name of the model's output in MLflow (the "signature" of the model: its input
 # columns and its output). With this name the model page itself says that the number
@@ -45,7 +46,9 @@ import pandas as pd  # the feature table, and the forecasts with their dates
 MODEL_OUTPUT = "change_degC"
 
 
-def temperature(model, x, water_last) -> np.ndarray:
+def temperature(
+    model: Pipeline, x: pd.DataFrame | np.ndarray, water_last: pd.Series | np.ndarray | list[float]
+) -> np.ndarray:
     """Tomorrow's mean water temperature (°C): the last reading plus the change the model predicts.
 
     model: a trained model of train.make_model(); model.predict(x) gives the change.
@@ -60,7 +63,7 @@ def temperature(model, x, water_last) -> np.ndarray:
     return np.asarray(water_last, dtype=float) + model.predict(x)
 
 
-def temperature_for_rows(model, rows: pd.DataFrame) -> pd.Series:
+def temperature_for_rows(model: Pipeline, rows: pd.DataFrame) -> pd.Series:
     """The forecast for rows of the feature table, one per day: what the live forecast calls.
 
     model: a model that was trained on a table (train.train_final), for example the

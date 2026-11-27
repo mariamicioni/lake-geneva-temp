@@ -94,7 +94,11 @@ def pointer_md5(text: str) -> str:
     # still logged, but no model is registered and the run turns red: then this list
     # has to be checked again.
     lines = [line for line in text.replace("\r\n", "\n").split("\n") if line != ""]
-    if len(lines) != len(POINTER_FORM) or not all(form.fullmatch(line) for form, line in zip(POINTER_FORM, lines)):
+    # strict=True: zip() stops with an error if the two lists have different lengths
+    # (here they cannot: the length is checked first, and `or` stops there).
+    if len(lines) != len(POINTER_FORM) or not all(
+        form.fullmatch(line) for form, line in zip(POINTER_FORM, lines, strict=True)
+    ):
         return ""
     return POINTER_FORM[1].fullmatch(lines[1]).group(1)
 

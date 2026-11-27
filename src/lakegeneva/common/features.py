@@ -173,7 +173,7 @@ def water_features(readings: pd.DataFrame) -> pd.DataFrame:
     return table
 
 
-def label_ready(days):
+def label_ready(days: pd.DatetimeIndex | pd.Timestamp) -> pd.DatetimeIndex | pd.Timestamp:
     """The moment the label of these rows can exist: the last 10-minute slot (23:50 Swiss time) of the next day."""
     # days: a DatetimeIndex or one Timestamp of rows (dates at midnight, no time zone).
     # days + 2 days = 00:00 at the end of tomorrow; tz_localize puts it on the Swiss

@@ -114,6 +114,7 @@ Set up and test (Python 3.12 and the exact package versions from `uv.lock`; the 
 git clone https://github.com/mariamicioni/lake-geneva-temp.git
 cd lake-geneva-temp
 uv sync --locked          # --locked: stop if uv.lock does not fit pyproject.toml
+uv run --locked ruff check   # the linter of CI: mistakes and missing type hints (rules in pyproject.toml)
 uv run --locked pytest
 ```
 Get the data (needs a key of the bucket's service account; the key path stays in `.dvc/config.local`, which is not in Git):
@@ -181,7 +182,7 @@ src/lakegeneva/
   common/      shared code: feature definition, the read path of the feature table (feature store), baselines, forecast from the model's change, names of the raw files, weather location
 tests/         unit tests (run in CI); fixtures/ holds the small test sample
 data/          raw/ and features/ (not in Git: DVC pointer files raw.dvc, features.dvc)
-.github/workflows/  ci.yml (tests + image), feature-pipeline.yml (daily), retrain.yml (weekly), promote.yml (by hand)
+.github/workflows/  ci.yml (ruff + tests + image), feature-pipeline.yml (daily), retrain.yml (weekly), promote.yml (by hand)
 notebooks/     exploration only
 docs/          proposal and milestone summaries
 Dockerfile     image of the feature pipeline
@@ -193,11 +194,11 @@ I build this project on what the MLOps HS26 course teaches. When a file follows 
 
 | File | Based on | What I changed |
 |---|---|---|
-| `.github/workflows/ci.yml` | Block 1 exercise, Part D and the image job of its solution [5] | No training on the real data (the tests train on small fake tables); runs the unit tests, then builds the image without publishing it |
+| `.github/workflows/ci.yml` | Block 1 exercise, Part D and the image job of its solution [5] | No training on the real data (the tests train on small fake tables); checks the code with ruff (MS2 review point E5), runs the unit tests, then builds the image without publishing it |
 | `.github/workflows/feature-pipeline.yml` | Block 1 exercise, Parts A (DVC) and D (CI with uv) [5] | Runs on a schedule; pulls and pushes the data with DVC and commits the pointer files |
 | `.github/workflows/retrain.yml` | Block 1 exercise, Parts A (DVC) and D (CI with uv) [5]; weekly policy from the SW09 retrain question [14] | Runs every Monday; pulls only the feature table, stops if it is old, trains, logs to MLflow on DagsHub and registers the model (a run on another branch only trains and tests); commits nothing |
 | `.github/workflows/promote.yml` | The same setup as `retrain.yml` [5]; a review of this repository (20.11.2026) found that a retrain could overwrite a rollback made while it ran | Written for this project: one concurrency group with `retrain.yml`, the version passed as an environment variable |
-| `pyproject.toml`, `uv.lock` | uv dependency management [4] | Own package layout under `src/lakegeneva/` |
+| `pyproject.toml`, `uv.lock` | uv dependency management [4]; ruff rules from the ruff documentation [18] | Own package layout under `src/lakegeneva/`; the ruff rules are named in the file, with type hints required in `src/` only |
 | `Dockerfile`, `.dockerignore` | Block 1 exercise, Part C (multi-stage image) [5]; `PYTHONUNBUFFERED=1` from the Block 3 exercise [12] | Python 3.12 like the rest of the project, base images and uv 0.13.0 pinned by digest, our package copied to `/app/src`; no model, no HEALTHCHECK/EXPOSE (the feature pipeline is a job, not a web service); the default command runs the downloads and the build, so it needs no key; the real data can be mounted at run time |
 | `src/lakegeneva/features/ingest_bafu.py` | BAFU Data Platform API documentation [1] | Written for this project |
 | `src/lakegeneva/features/ingest_water.py` | existenz.ch Hydrology API documentation [2], BAFU Data Platform API documentation [1] (fallback and backfill) | Written for this project |
@@ -241,3 +242,4 @@ I build this project on what the MLOps HS26 course teaches. When a file follows 
 [15] DVC (2026). Command reference: dvc get, version 3.67.1 (`dvc get --help`). checked on 24.11.2026
 [16] Open-Meteo (2026). Weather Forecast API, parameter `cell_selection` (land, sea, nearest). accessed on 26.11.2026 from open-meteo.com/en/docs
 [17] GitHub (2026). Workflow commands for GitHub Actions: `::warning title=...::message`. accessed on 26.11.2026 from docs.github.com/en/actions/reference/workflows-and-actions/workflow-commands
+[18] Astral (2026). Ruff, version 0.17.6: rules E, F, UP, B and ANN (`ruff check --show-settings`, docs.astral.sh/ruff/rules). checked on 27.11.2026

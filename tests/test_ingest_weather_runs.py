@@ -69,7 +69,7 @@ def test_write_csv_has_one_row_per_hour_and_leaves_missing_values_empty(tmp_path
         "wind_speed_10m_previous_day2": [10.2, 12.0],
         "wind_direction_10m_previous_day2": [225, 230],
     }
-    fetched_at = dt.datetime(2026, 10, 27, 19, 30, tzinfo=dt.timezone.utc)
+    fetched_at = dt.datetime(2026, 10, 27, 19, 30, tzinfo=dt.UTC)
     # tmp_path (a pytest helper) is a fresh temporary folder, deleted afterwards,
     # so the test never writes into the real data/ folder.
     path = tmp_path / "weather.csv"
@@ -109,7 +109,7 @@ def test_main_daily_run_includes_tomorrow(monkeypatch, tmp_path):
     ingest_weather_runs.main()
 
     # Tomorrow (the day we predict) is included, plus the 7 days before today.
-    today = dt.datetime.now(dt.timezone.utc).date()
+    today = dt.datetime.now(dt.UTC).date()
     assert asked == [(today - dt.timedelta(days=7), today + dt.timedelta(days=1))]
 
 

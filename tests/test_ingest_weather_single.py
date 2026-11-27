@@ -128,7 +128,7 @@ def test_main_daily_run_asks_for_today_and_the_6_days_before(monkeypatch, tmp_pa
 
     ingest_weather_single.main()
 
-    today = dt.datetime.now(dt.timezone.utc).date()
+    today = dt.datetime.now(dt.UTC).date()
     assert asked == [today - dt.timedelta(days=n) for n in range(6, -1, -1)]  # 7 days, oldest first
 
 

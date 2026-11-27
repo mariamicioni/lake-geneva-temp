@@ -23,4 +23,30 @@ dev = [
     "mlflow>=3.18",
     "pip>=26",
     "pytest>=9.1.1",
+    "ruff>=0.17.6",
 ]
+
+# ruff: a linter, it reads the code and finds mistakes and missing type hints without
+# running it (MS2 review point E5: "finish the helpers and add ruff to CI"). CI runs
+# `uv run ruff check` before the tests. The rules are named here, so a newer ruff
+# with other default rules does not change what is checked.
+[tool.ruff]
+target-version = "py312"
+
+[tool.ruff.lint]
+select = [
+    "E4", "E7", "E9", "F",  # real errors: unused imports and names, wrong syntax (pycodestyle, pyflakes)
+    "UP",                   # modern Python 3.12 forms, e.g. datetime.UTC
+    # Not "I" (sorted imports): it would split the one-line imports with a comment
+    # behind them into blocks, and the comments say why each import is there.
+    "B",                    # common bug patterns (bugbear), e.g. zip() of lists with different lengths
+    "ANN",                  # a type hint on every argument and every return value
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Test functions get no type hints: only pytest calls them, and their arguments are
+# pytest fixtures (tmp_path, monkeypatch, ...).
+"tests/*" = ["ANN"]
+# These tests import the fixture `repo` from test_feature_store.py and receive it as an
+# argument with the same name. That is how pytest shares a fixture, not a mistake.
+"tests/test_tag_data.py" = ["F811"]

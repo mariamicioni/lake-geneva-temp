@@ -71,7 +71,7 @@ def main() -> None:
 
     # The download time, saved in every row: later we can prove that a forecast
     # was really available before the 18:00 cutoff.
-    now = dt.datetime.now(dt.timezone.utc)
+    now = dt.datetime.now(dt.UTC)
     hourly = fetch()
 
     # One file per run, e.g. weather_geneva_fetched_2026-10-20.csv. A second run on the

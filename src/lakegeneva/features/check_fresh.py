@@ -67,7 +67,7 @@ def service_day(now: dt.datetime) -> dt.date:
     # asked for Monday's row before Monday's job could even start; found in a check on
     # 26.11.2026.) At 19:00 UTC Switzerland has the same date, so S is a Swiss date too.
     # `now` must know its time zone (e.g. dt.timezone.utc).
-    utc = now.astimezone(dt.timezone.utc)
+    utc = now.astimezone(dt.UTC)
     if utc.hour >= SCHEDULE_HOUR_UTC:
         return utc.date()
     return utc.date() - dt.timedelta(days=1)
@@ -121,7 +121,7 @@ def check_issue_day(table: pd.DataFrame, service: dt.date) -> tuple[bool, bool, 
     # The old age rule passed when this row missed a feature but an older row was
     # complete. np.isfinite: no missing value (NaN) and no infinity.
     values = table.loc[day, features.FEATURES].to_numpy(dtype=float)
-    missing = [column for column, value in zip(features.FEATURES, values) if not np.isfinite(value)]
+    missing = [column for column, value in zip(features.FEATURES, values, strict=True) if not np.isfinite(value)]
     if missing:
         return False, False, f"the row of issue day D {issue:%d.%m.%Y} misses {', '.join(missing)}"
     if delay == 0:
@@ -153,7 +153,7 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    service = args.service_day or service_day(dt.datetime.now(dt.timezone.utc))
+    service = args.service_day or service_day(dt.datetime.now(dt.UTC))
     # The one read path of the feature table (feature_store.py, review point E1).
     table, _ = feature_store.load_features(path=args.table)
     passed, delayed, text = check_issue_day(table, service)

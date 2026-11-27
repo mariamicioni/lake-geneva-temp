@@ -120,7 +120,7 @@ def main() -> None:
     args = parser.parse_args()
 
     # The download time, saved in every row.
-    now = dt.datetime.now(dt.timezone.utc)
+    now = dt.datetime.now(dt.UTC)
     # Defaults for the daily run: the runs of today and the 6 days before (UTC
     # days). The archive does not change, so the overlap with earlier runs is
     # harmless and fills in a missed day.

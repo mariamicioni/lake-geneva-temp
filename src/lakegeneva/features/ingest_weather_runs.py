@@ -117,7 +117,7 @@ def main() -> None:
 
     # The download time, saved in every row: if two files hold the same hour, the
     # features can take the value from the newest file.
-    now = dt.datetime.now(dt.timezone.utc)
+    now = dt.datetime.now(dt.UTC)
     # Defaults for the daily run: tomorrow (the day we predict) and the 7 days
     # before today, as UTC days (tomorrow's Swiss day ends at 22:00 or 23:00 UTC,
     # so it is inside). A 48-hour-old forecast is never changed afterwards, so the

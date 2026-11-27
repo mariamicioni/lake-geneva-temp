@@ -25,7 +25,9 @@ bootstrap as the baselines, so every number of the README can be repeated.
 # rows the same alpha is a slightly stronger penalty; that is part of the answer.
 
 import argparse  # reads the command-line option --features
+import datetime as dt  # type hint: the first and last day of the lake download
 import time  # perf_counter() measures how long training takes
+from collections.abc import Iterable  # type hint: anything a for loop can go through (a list, an index of dates)
 
 import numpy as np  # median of the measured times; np.ones for the "all test days" window
 import pandas as pd  # the daily feature table
@@ -44,7 +46,7 @@ RETRAIN = {"every day": 1, "every week": 7, "every month": 30, "only once": 100_
 TIMING_REPEATS = 5
 
 
-def scores(rows: pd.DataFrame, forecast: pd.Series, days) -> dict:
+def scores(rows: pd.DataFrame, forecast: pd.Series, days: Iterable[pd.Timestamp]) -> dict:
     """MAE on all test days and on the big-change days (°C). Every day in `days` needs a forecast."""
     # The same rule as train.evaluate(): a missing forecast (NaN, or a day that is not
     # there) must stop the experiment instead of quietly dropping out of the mean. This
@@ -67,7 +69,7 @@ def windows_of(part: pd.DataFrame) -> dict:
     }
 
 
-def difference(error_a: pd.Series, error_b: pd.Series, in_window) -> dict:
+def difference(error_a: pd.Series, error_b: pd.Series, in_window: np.ndarray) -> dict:
     """MAE(a) - MAE(b) on the days in `in_window`: the gain of a in % and the 95 % interval."""
     # Below 0 means that a is better. The interval says how sure that is: if it holds
     # 0, the days cannot tell which one is better.
@@ -107,7 +109,7 @@ def fit_seconds(rows: pd.DataFrame, columns: list[str], alpha: float) -> float:
     return float(np.median(times))
 
 
-def average_change(rows: pd.DataFrame, days) -> pd.Series:
+def average_change(rows: pd.DataFrame, days: Iterable[pd.Timestamp]) -> pd.Series:
     """Persistence plus the average change so far: no feature and no model."""
     # Why this rung: the last reading before 18:00 is an afternoon value, and on
     # average it is warmer than the mean of the next day (by 0.31 degC on 14.11.2026,
@@ -120,7 +122,7 @@ def average_change(rows: pd.DataFrame, days) -> pd.Series:
     return pd.Series(forecasts, name="forecast", dtype=float).rename_axis("date")
 
 
-def ladder(rows: pd.DataFrame, test_days, alphas: dict) -> pd.DataFrame:
+def ladder(rows: pd.DataFrame, test_days: pd.DatetimeIndex, alphas: dict) -> pd.DataFrame:
     """Question 1: each rung, from free to the full model, on the same test days."""
     part = rows.loc[test_days]
     result = {
@@ -143,7 +145,7 @@ def ladder(rows: pd.DataFrame, test_days, alphas: dict) -> pd.DataFrame:
     return pd.DataFrame(result).T
 
 
-def intervals(rows: pd.DataFrame, test_days, alphas: dict) -> pd.DataFrame:
+def intervals(rows: pd.DataFrame, test_days: pd.DatetimeIndex, alphas: dict) -> pd.DataFrame:
     """Question 1, continued: the differences between rungs, with their 95 % intervals."""
     # Why: the README says e.g. "against row 3 the model gains 6 %" and gives an
     # interval. Before, these intervals were computed by hand; now this function
@@ -182,7 +184,7 @@ def intervals(rows: pd.DataFrame, test_days, alphas: dict) -> pd.DataFrame:
     return pd.DataFrame(result).T
 
 
-def learning_curve(rows: pd.DataFrame, test_days, alpha: float) -> pd.DataFrame:
+def learning_curve(rows: pd.DataFrame, test_days: pd.DatetimeIndex, alpha: float) -> pd.DataFrame:
     """Question 2: the full model trained on less data, on the same test days."""
     result = {}
     for name, window in WINDOWS.items():
@@ -191,7 +193,7 @@ def learning_curve(rows: pd.DataFrame, test_days, alpha: float) -> pd.DataFrame:
     return pd.DataFrame(result).T
 
 
-def retrain_replay(rows: pd.DataFrame, test_days, alpha: float) -> pd.DataFrame:
+def retrain_replay(rows: pd.DataFrame, test_days: pd.DatetimeIndex, alpha: float) -> pd.DataFrame:
     """Question 3: the full model retrained less often, on the same test days."""
     result = {}
     for name, every in RETRAIN.items():
@@ -232,7 +234,7 @@ def forecast_comparison(rows: pd.DataFrame, single: pd.DataFrame) -> tuple[pd.Da
     return pd.DataFrame(result).T, pd.DataFrame(differences).T
 
 
-def lake_weather(start, end) -> pd.DataFrame:
+def lake_weather(start: dt.date, end: dt.date) -> pd.DataFrame:
     """The five weather features from the 48-hour-old forecast at the lake point (downloads it)."""
     # The same request as the daily job (ingest_weather_runs.fetch), only at another
     # point, and with the grid cell over the water (location.py); nothing is saved.

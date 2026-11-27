@@ -49,11 +49,11 @@ def build_query(start: dt.date, end: dt.date) -> str:
     # The API filters on UTC timestamps, so we turn our Swiss days into UTC:
     # - first: midnight (UTC+1) at the start of the first day,
     #   e.g. 01.10.2026 00:00 UTC+1 = 2026-09-30T23:00:00Z
-    first = dt.datetime.combine(start, dt.time(), BAFU_TIME).astimezone(dt.timezone.utc)
+    first = dt.datetime.combine(start, dt.time(), BAFU_TIME).astimezone(dt.UTC)
     # - after_last: midnight at the start of the day AFTER the last day.
     #   We ask for timestamps "< after_last", so the last day is included
     #   but the next one is not.
-    after_last = dt.datetime.combine(end + dt.timedelta(days=1), dt.time(), BAFU_TIME).astimezone(dt.timezone.utc)
+    after_last = dt.datetime.combine(end + dt.timedelta(days=1), dt.time(), BAFU_TIME).astimezone(dt.UTC)
     # The query in words: "from the water observations, give me the daily means
     # (data_1day_mean) where the station number is 2606, the parameter is WT or Q,
     # and the timestamp is >= first and < after_last; for each row return the

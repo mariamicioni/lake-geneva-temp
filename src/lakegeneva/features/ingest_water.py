@@ -173,7 +173,7 @@ def write_csv(readings: dict[int, dict[str, float]], path: Path) -> None:
             # Unix time -> readable UTC time, e.g. 2025-10-09T08:53:20+00:00.
             # We keep UTC on purpose: one clear time zone in the raw data; the
             # conversion to Swiss time (18:00 cutoff) happens in the features.
-            time_utc = dt.datetime.fromtimestamp(ts, dt.timezone.utc).isoformat()
+            time_utc = dt.datetime.fromtimestamp(ts, dt.UTC).isoformat()
             # .get() returns None for a missing value, which csv writes as an
             # empty cell, so a missing measurement stays visibly empty.
             writer.writerow([time_utc, readings[ts].get("temperature"), readings[ts].get("flow")])
@@ -193,7 +193,7 @@ def main() -> None:
         # parser.error() prints the message and stops, like a wrong option does.
         parser.error("--end only works together with --start")
 
-    today = dt.datetime.now(dt.timezone.utc).date()
+    today = dt.datetime.now(dt.UTC).date()
     if args.start:
         # Backfill: only the BAFU Data Platform has the history.
         end = args.end or today

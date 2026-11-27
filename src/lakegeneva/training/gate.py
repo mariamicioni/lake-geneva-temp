@@ -45,6 +45,7 @@ from zoneinfo import ZoneInfo  # the Swiss clock
 
 import numpy as np  # np.isfinite on many numbers at once
 import pandas as pd  # the feature table and the forecasts
+from sklearn.pipeline import Pipeline  # type hint: the model (scaling + Ridge, train.make_model)
 
 from lakegeneva.common import baselines, features, forecasting  # shared definitions
 from lakegeneva.features import check_fresh  # the issue-day check of the feature pipeline
@@ -91,10 +92,10 @@ CHECKS = (
 
 def now() -> dt.datetime:
     """The time now, in UTC (a function, so the tests can set another time)."""
-    return dt.datetime.now(dt.timezone.utc)
+    return dt.datetime.now(dt.UTC)
 
 
-def is_number(value) -> bool:
+def is_number(value: object) -> bool:
     """True for a real number that is not NaN and not infinite."""
     # bool is excluded on purpose: True would count as 1.
     return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
@@ -249,7 +250,9 @@ def check_fresh_data(last_label: pd.Timestamp, table: pd.DataFrame, time: dt.dat
     return True, f"passed: {text}; newest label {label_age} days old"
 
 
-def run_checks(summary: dict, candidate, champion: dict | None, table: pd.DataFrame, last_label: pd.Timestamp) -> dict:
+def run_checks(
+    summary: dict, candidate: Pipeline, champion: dict | None, table: pd.DataFrame, last_label: pd.Timestamp
+) -> dict:
     """All five checks on the REGISTERED candidate (loaded back from MLflow). Returns check -> text."""
     # candidate: the model as it was loaded back from the registry, so the checks test
     # the artifact that would become the champion, not only the object in memory.
@@ -270,7 +273,8 @@ def run_checks(summary: dict, candidate, champion: dict | None, table: pd.DataFr
         check_plausible(candidate_forecast, newest),
         check_fresh_data(last_label, table, now()),
     ]
-    return {name: text for name, (_, text) in zip(CHECKS, results)}
+    # strict=True: five names for five results, or an error (never a check dropped quietly).
+    return {name: text for name, (_, text) in zip(CHECKS, results, strict=True)}
 
 
 def passes(checks: dict) -> bool:

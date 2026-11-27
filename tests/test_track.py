@@ -58,7 +58,7 @@ def trained(monkeypatch, tmp_path):
 def newest_evening(table: pd.DataFrame, days_later: int = 0) -> dt.datetime:
     """19:30 UTC (after the 18:00 cutoff in Switzerland) on the newest day of the table, plus `days_later`."""
     day = table.index.max().date() + dt.timedelta(days=days_later)
-    return dt.datetime.combine(day, dt.time(19, 30), tzinfo=dt.timezone.utc)
+    return dt.datetime.combine(day, dt.time(19, 30), tzinfo=dt.UTC)
 
 
 def two_targets(all_days: float, big_change: float) -> pd.DataFrame:
