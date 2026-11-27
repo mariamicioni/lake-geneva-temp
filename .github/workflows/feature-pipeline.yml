@@ -9,7 +9,8 @@
 #   5. commits the two small pointer files, so every day is one data version in Git,
 #   6. checks that the new table is not too old (otherwise the job turns red).
 # It runs every evening, and a catch-up run later in the night does all this again
-# only if the evening was not on time (job "catchup", MS2 review point E4).
+# only if the evening was not on time (MS2 review point E4). Every scheduled run first
+# checks that in the job "ready", on the newest commit of the branch.
 name: Feature pipeline
 
 on:
@@ -24,9 +25,10 @@ on:
     # The catch-up run (MS2 review point E4), later in the night: 03:00 UTC = 04:00
     # Swiss winter time, 05:00 summer time. On 6 of 16 evenings (11.-26.11.2026) the
     # evening run came before BAFU had the readings of the day, so the row of the
-    # evening S was not ready (D = S-1, "delayed"). The job "catchup" below first asks
-    # whether the stored table is already on time for S; only if not, the pipeline
-    # runs again. So a night with an on-time evening run gets no second data version.
+    # evening S was not ready (D = S-1, "delayed"). In both scheduled runs, the job
+    # "ready" below first asks whether the stored table is already on time for S; only
+    # if not, the pipeline runs. So whichever run comes second (GitHub starts them hours
+    # late, in any order) does nothing if the first one was on time.
     - cron: "0 3 * * *"
   workflow_dispatch:        # allows a manual run from the Actions tab
     inputs:
@@ -47,18 +49,30 @@ permissions:
   contents: write
 
 jobs:
-  # Only in the catch-up run (03:00 UTC, or by hand with catch_up): is the stored
-  # table already on time for the last evening S? It gets only the table (dvc pull of
-  # data/features.dvc, a few seconds) and asks check_fresh --require-on-time. The
-  # answer goes to the job "features" as the output "needed".
-  catchup:
-    if: github.event.schedule == '0 3 * * *' || inputs.catch_up
+  # In every scheduled run (19:00 and 03:00 UTC) and in a manual catch-up run: is the
+  # stored table already on time for the last evening S? It gets only the table (dvc
+  # pull of data/features.dvc, a few seconds) and asks check_fresh --require-on-time.
+  # The answer ("needed") and the commit it looked at ("sha") go to the job "features".
+  # A manual run without catch_up skips this job and always runs the pipeline.
+  ready:
+    if: github.event_name == 'schedule' || inputs.catch_up
     runs-on: ubuntu-latest
     timeout-minutes: 10
     outputs:
       needed: ${{ steps.check.outputs.needed }}
+      sha: ${{ steps.tip.outputs.sha }}
     steps:
+      # The branch tip NOW, not the commit that started the run. A run that waited
+      # behind another one (concurrency above) must see the data version that the other
+      # one stored. With the commit of its start it would check the old pointers and
+      # build the same evening again, and the two pointer commits would conflict (found
+      # in a review on 27.11.2026).
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.ref }}
+      - name: Note the commit this run works on
+        id: tip
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
       - uses: astral-sh/setup-uv@v10.2.0
         with:
           enable-cache: true
@@ -83,28 +97,34 @@ jobs:
         run: |
           if uv run --locked --no-dev python -m lakegeneva.features.check_fresh --require-on-time; then
             echo "needed=false" >> "$GITHUB_OUTPUT"
-            echo "The last evening is on time: the catch-up run has nothing to do."
+            echo "The last evening is on time: this run has nothing to do."
           else
             echo "needed=true" >> "$GITHUB_OUTPUT"
-            echo "::notice title=Catch-up run::the last evening is not on time yet, so the pipeline runs again."
+            echo "::notice title=Pipeline needed::the last evening is not on time yet, so the pipeline runs."
           fi
 
   features:
-    # After the catch-up check. The evening run (and a manual run without catch_up)
-    # skips that check, so this job runs. The catch-up run: only if the check says
-    # "needed", or if the check itself failed (then this job shows the problem).
+    # After the check. It runs if the check says "needed", if the check was skipped (a
+    # manual run without catch_up), or if the check itself failed (then this job shows
+    # the problem). It never runs when the check says "on time".
     # !cancelled(): without it, a skipped check would skip this job too.
-    needs: catchup
-    if: ${{ !cancelled() && (needs.catchup.result == 'skipped' || needs.catchup.outputs.needed == 'true' || needs.catchup.result == 'failure') }}
+    needs: ready
+    if: ${{ !cancelled() && (needs.ready.result == 'skipped' || needs.ready.outputs.needed == 'true' || needs.ready.result == 'failure') }}
     runs-on: ubuntu-latest  # a fresh Linux machine from GitHub, deleted after the run
     timeout-minutes: 30     # stop a hanging run (each download retry waits 60 s)
     steps:
       # 1. Copy the repository onto the machine: code and pointer files, no data.
       #    fetch-depth: 0 gets the whole history, so step 9 can put its commit on
       #    top of a commit I might push while the job is running.
+      #    ref: exactly the commit the check looked at (so the check and the build see
+      #    the same data version); without the check, the branch tip when this job
+      #    starts. Either way not the commit that started the run (see the job "ready").
+      #    It is a commit, not a branch, so the job works on a "detached HEAD": step 9
+      #    still commits, rebases onto main and pushes HEAD:main (tested on 27.11.2026).
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
+          ref: ${{ needs.ready.outputs.sha || github.ref }}
 
       # 2. uv installs Python and the exact package versions from uv.lock, without
       #    the dev tools (pytest): the same packages the Docker image will have.

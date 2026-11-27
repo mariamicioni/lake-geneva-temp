@@ -136,26 +136,38 @@ def test_a_catch_up_run_later_in_the_night_runs_only_if_the_evening_is_not_on_ti
     workflow = WORKFLOW.read_text(encoding="utf-8")
     # Two schedules: the evening run and the catch-up run later in the night.
     assert 'cron: "0 19 * * *"' in workflow and 'cron: "0 3 * * *"' in workflow
-    # The catch-up check runs only for the 03:00 UTC schedule or a manual catch-up run.
-    check = workflow[workflow.index("  catchup:") : workflow.index("  features:")]
-    assert "if: github.event.schedule == '0 3 * * *' || inputs.catch_up" in check
+    # The check runs in EVERY scheduled run and in a manual catch-up run: GitHub starts
+    # both schedules hours late and in any order, so whichever comes second must see
+    # that the first one was on time (review of 27.11.2026).
+    check = workflow[workflow.index("  ready:") : workflow.index("  features:")]
+    assert "if: github.event_name == 'schedule' || inputs.catch_up" in check
+    # It looks at the branch tip after the wait, not at the commit that started the run,
+    # and notes that commit for the build (review of 27.11.2026: a queued run checked
+    # old pointers, and two pointer commits conflicted).
+    assert "ref: ${{ github.ref }}" in check
+    assert 'echo "sha=$(git rev-parse HEAD)"' in check
+    assert "sha: ${{ steps.tip.outputs.sha }}" in check
     # It gets only the table (not the raw files) and asks whether the evening is on time.
     assert "run: dvc pull data/features.dvc" in check
     assert "check_fresh --require-on-time" in check
     assert 'echo "needed=false"' in check and 'echo "needed=true"' in check
     assert "needed: ${{ steps.check.outputs.needed }}" in check
-    # The pipeline job waits for the check and runs if the check was skipped (the
-    # evening run), if it says "needed", or if it failed. Never when it says "on time".
+    # The pipeline job waits for the check and runs if the check was skipped (a manual
+    # run), if it says "needed", or if it failed. Never when it says "on time".
     job = workflow[workflow.index("  features:") :]
-    job = job[: job.index("steps:")]
-    assert "needs: catchup" in job
-    condition = next(line for line in job.splitlines() if line.strip().startswith("if:"))
+    header = job[: job.index("steps:")]
+    assert "needs: ready" in header
+    condition = next(line for line in header.splitlines() if line.strip().startswith("if:"))
     for part in (
         "!cancelled()",
-        "needs.catchup.result == 'skipped'",
-        "needs.catchup.outputs.needed == 'true'",
-        "needs.catchup.result == 'failure'",
+        "needs.ready.result == 'skipped'",
+        "needs.ready.outputs.needed == 'true'",
+        "needs.ready.result == 'failure'",
     ):
         assert part in condition
+    # And it builds on exactly the commit the check looked at (or the branch tip).
+    checkout = job[job.index("- uses: actions/checkout@v7") : job.index("- uses: astral-sh/setup-uv")]
+    assert "ref: ${{ needs.ready.outputs.sha || github.ref }}" in checkout
+    assert "fetch-depth: 0" in checkout
     # A manual run can be a catch-up run too (to try it), off by default.
     assert "catch_up:" in workflow and "type: boolean" in workflow and "default: false" in workflow
