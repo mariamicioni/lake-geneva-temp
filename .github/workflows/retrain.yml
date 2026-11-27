@@ -78,8 +78,8 @@ jobs:
       #    register a "new" version and move the alias to it. check_fresh.py is the same
       #    check as at the end of the feature pipeline: the row of the issue day D for
       #    the newest evening S. On Monday morning S is Sunday, and D should be Sunday
-      #    (or Saturday, one day late, if BAFU was late). A red step stops the job, so
-      #    nothing is logged or registered.
+      #    (or Saturday, one day late, if Sunday had too few readings before 18:00 when
+      #    its job ran). A red step stops the job, so nothing is logged or registered.
       - name: Check that the feature table is fresh
         run: uv run --locked python -m lakegeneva.features.check_fresh
 

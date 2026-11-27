@@ -61,7 +61,11 @@ def test_one_day_late_passes_but_says_delayed():
     passed, delayed, text = check_fresh.check_issue_day(table, EVENING)
 
     assert passed and delayed
-    assert "D 24.11.2026" in text and "78 of the 90" in text
+    assert "only 78 of the 90" in text
+    # The row of a day forecasts the next day: the inputs for 26.11 are missing, and the
+    # row of D (24.11) forecasts 25.11 (review of 27.11.2026: a first text got this wrong).
+    assert "forecast of 26.11.2026 are missing" in text
+    assert "issue day D 24.11.2026, which forecasts 25.11.2026" in text
 
 
 def test_two_days_late_fails():
@@ -90,7 +94,7 @@ def test_no_complete_day_means_no_issue_day():
     assert not passed and "no issue day" in text
 
 
-def test_other_broken_tables_fail_and_a_newer_table_passes():
+def test_other_broken_tables_fail():
     # An infinite value is not a real feature either.
     table = table_until("2026-11-25")
     table.loc[pd.Timestamp("2026-11-25"), "air_temp_fc_d1"] = float("inf")
@@ -102,10 +106,32 @@ def test_other_broken_tables_fail_and_a_newer_table_passes():
     # Two rows for one date: not clear which is the row of D.
     doubled = pd.concat([table_until("2026-11-25"), table_until("2026-11-25").tail(1)])
     passed, _, text = check_fresh.check_issue_day(doubled, EVENING)
-    assert not passed and "more than one row" in text
-    # D after S (a run in the afternoon, when today already has 90 readings): newer
-    # than needed, so on time.
-    passed, delayed, _ = check_fresh.check_issue_day(table_until("2026-11-26"), EVENING)
+    assert not passed and "exactly one row per date" in text
+    # A row at another time of the day: not one row per whole date.
+    shifted = table_until("2026-11-25")
+    shifted.index = shifted.index + pd.Timedelta(hours=12)
+    passed, _, text = check_fresh.check_issue_day(shifted, EVENING)
+    assert not passed and "one row per date, at midnight" in text
+    # An infinite count of readings would pass "at least 90" (review of 27.11.2026).
+    passed, _, text = check_fresh.check_issue_day(table_until("2026-11-25", readings=(108, 108, float("inf"))), EVENING)
+    assert not passed and "infinite" in text
+
+
+def test_rows_after_the_service_evening_do_not_count():
+    # A table one day newer than S (a check the next afternoon), and the row of S itself
+    # misses the wind. A first version took the newest complete day (26.11) and said
+    # "on time" (review of 27.11.2026). D for S is the newest complete day UP TO S.
+    table = table_until("2026-11-26")
+    table.loc[pd.Timestamp("2026-11-25"), "wind_sw_fc_d0"] = None
+
+    passed, _, text = check_fresh.check_issue_day(table, EVENING)
+
+    assert not passed and "D 25.11.2026 misses wind_sw_fc_d0" in text
+    # With a complete row of S, a newer day changes nothing: on time, D is S.
+    passed, delayed, text = check_fresh.check_issue_day(table_until("2026-11-26"), EVENING)
+    assert passed and not delayed and "issue day D 25.11.2026" in text
+    # A later row without readings yet (like a weather-only row of tomorrow) changes nothing either.
+    passed, delayed, _ = check_fresh.check_issue_day(table_until("2026-11-26", readings=(108, 108, 0)), EVENING)
     assert passed and not delayed
 
 

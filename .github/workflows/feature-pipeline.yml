@@ -156,9 +156,10 @@ jobs:
       # 10. A source can keep sending old data without any error, and then all steps
       #     above stay green. This step checks the row of the issue day D for this
       #     evening S (MS2 review point A2): D = S is on time; D = the day before S
-      #     stays green with a warning in the run summary (BAFU was late); no D, an
-      #     older D or a missing feature in the row of D turns the job red, and GitHub
-      #     sends an email. It comes last, so the files of this run are already saved.
+      #     stays green with a warning in the run summary (S had fewer than 90
+      #     readings before 18:00 when the job ran, or no row yet); no D, an older D
+      #     or a missing feature in the row of D turns the job red, and GitHub sends
+      #     an email. It comes last, so the files of this run are already saved.
       - name: Check that the data is fresh
         if: always() && steps.build.outcome == 'success'
         run: uv run --locked --no-dev python -m lakegeneva.features.check_fresh
