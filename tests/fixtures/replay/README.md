@@ -13,4 +13,4 @@ The file name is the host and path of the request; the query (dates, point) is l
 
 To record them again (for example after an API changed its format): run the daily pipeline once in a temporary folder, save the first answer of each API under `web.answer_name(url)`, and copy the files here.
 
-Used by `tests/test_replay.py` and by the image job of `.github/workflows/ci.yml`.
+Used by `tests/test_replay.py` and by the image job of `.github/workflows/ci.yml`. Both check the table built from these answers with the same script, `check_table.py`: issue day 26.11.2026, all ten features on its row, and some rows with a label.

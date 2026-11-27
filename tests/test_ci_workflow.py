@@ -23,8 +23,13 @@ def test_the_image_runs_the_pipeline_on_saved_answers_without_internet():
     assert "--network none" in step
     assert "-e LAKEGENEVA_REPLAY=/replay" in step
     assert '-v "$PWD/tests/fixtures/replay:/replay:ro"' in step
-    # The table it built must name the issue day of the saved answers.
-    assert 'grep -q "issue day D: 2026-11-26" replay.log' in step
+    # The table it built is checked in the same container with the rules of
+    # tests/test_replay.py (issue day, all features, labels), not only by its date, and
+    # nothing pipes the output, so the exit code of docker is the exit code of the step
+    # (review of 27.11.2026: tee hid a failed container).
+    assert "python -m lakegeneva.features.run_pipeline && python /replay/check_table.py data/features/features.parquet" in step
+    assert "| tee" not in step.split("- name:")[1]
+    assert "shell: bash" in step.split("- name:")[1]
     # And it runs after the image is built, in the image job.
     assert workflow.index("tags: lake-geneva-features:ci") < workflow.index("Run the pipeline in the image")
 

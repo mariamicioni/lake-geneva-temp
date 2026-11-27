@@ -83,11 +83,17 @@ jobs:
       # API answers (MS2 review point A3). LAKEGENEVA_REPLAY makes common/web.py read
       # them from tests/fixtures/replay, mounted read-only, and --network none switches
       # the internet off. So a change that breaks a download or the table inside the
-      # image fails here, before the nightly job. The saved answers are from 20.-27.11.2026,
-      # so the table must name 26.11 as its issue day. (GitHub's bash uses pipefail: if
-      # docker fails, the step fails although tee does not.)
+      # image fails here, before the nightly job. Then check_table.py, in the same
+      # container, checks the table the image built: the issue day 26.11 (the saved
+      # answers are from 20.-27.11.2026), all ten features on its row, and some rows with
+      # a label. The same script runs in tests/test_replay.py. (A first version only
+      # looked for the date in the output: with the wind removed, the date was still
+      # right but 5 of the 10 features were missing, and the output went through tee,
+      # which hid the exit code of docker; found in a review on 27.11.2026.)
+      # shell: bash also sets pipefail (GitHub's default shell is only "bash -e").
       - name: Run the pipeline in the image on saved API answers
+        shell: bash
         run: |
           docker run --rm --network none -e LAKEGENEVA_REPLAY=/replay \
-            -v "$PWD/tests/fixtures/replay:/replay:ro" lake-geneva-features:ci | tee replay.log
-          grep -q "issue day D: 2026-11-26" replay.log
+            -v "$PWD/tests/fixtures/replay:/replay:ro" lake-geneva-features:ci \
+            sh -c "python -m lakegeneva.features.run_pipeline && python /replay/check_table.py data/features/features.parquet"

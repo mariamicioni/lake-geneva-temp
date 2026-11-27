@@ -1,6 +1,7 @@
 """Tests for the replay mode (common/web.py): the whole pipeline on saved API answers, no internet."""
 # How to run: `uv run pytest` (locally) - CI runs the same on every push. CI also runs
 # the Docker image on the same saved answers (.github/workflows/ci.yml, MS2 review A3).
+import runpy  # runs the check script of the fixtures folder and returns its functions
 import sys
 import urllib.request
 from pathlib import Path
@@ -66,10 +67,20 @@ def test_the_whole_pipeline_runs_on_the_saved_answers_without_internet(monkeypat
     # One raw file per download, and the feature table built from them.
     assert len(list((tmp_path / "data" / "raw").glob("*.csv"))) == 4
     table = pd.read_parquet(tmp_path / "data" / "features" / "features.parquet")
-    # The saved answers are from 20.-27.11.2026: 26.11 is the newest day with at least
-    # 90 readings before 18:00, and its row has all ten features.
-    day = features.issue_day(table)
-    assert day == pd.Timestamp("2026-11-26")
-    assert table.loc[day, features.FEATURES].notna().all()
-    # Some rows also have a label (the mean of a complete next day).
-    assert table[features.LABEL].notna().any()
+    # The same check as in CI's image job (tests/fixtures/replay/check_table.py): the
+    # issue day 26.11, all ten features on its row, and some rows with a label.
+    assert check_table(table).startswith("table OK: issue day 2026-11-26 with all 10 features")
+    # And the check really fails when a feature is missing on the issue day (review of
+    # 27.11.2026: without wind the date was still right, and the old check stayed green).
+    broken = table.copy()
+    broken.loc[features.issue_day(table), "wind_sw_fc_d0"] = None
+    with pytest.raises(SystemExit, match="misses wind_sw_fc_d0"):
+        check_table(broken)
+    unlabelled = table.assign(**{features.LABEL: None})
+    with pytest.raises(SystemExit, match="no row has a label"):
+        check_table(unlabelled)
+
+
+def check_table(table: pd.DataFrame) -> str:
+    """The check function of tests/fixtures/replay/check_table.py (a plain script, not a module)."""
+    return runpy.run_path(str(ANSWERS / "check_table.py"))["check"](table)
