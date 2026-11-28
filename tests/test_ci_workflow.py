@@ -27,9 +27,18 @@ def test_the_image_runs_the_pipeline_on_saved_answers_without_internet():
     # tests/test_replay.py (issue day, all features, labels), not only by its date, and
     # nothing pipes the output, so the exit code of docker is the exit code of the step
     # (review of 27.11.2026: tee hid a failed container).
-    assert "python -m lakegeneva.features.run_pipeline && python /replay/check_table.py data/features/features.parquet" in step
-    assert "| tee" not in step.split("- name:")[1]
-    assert "shell: bash" in step.split("- name:")[1]
+    this_step = step.split("- name:")[1]
+    assert "| tee" not in this_step
+    assert "shell: bash" in this_step
+    # The first container runs the image's OWN default command: nothing after the image
+    # name (review of 27.11.2026: "sh -c ..." replaced it, so a broken CMD stayed green).
+    lines = [line.strip() for line in this_step.splitlines()]
+    first_run = lines.index(next(line for line in lines if line.startswith("docker run")))
+    command = " ".join(lines[first_run : lines.index("lake-geneva-features:ci") + 1])
+    assert command.endswith("lake-geneva-features:ci")
+    assert '-v "$PWD/replay-out:/app/data/features"' in command
+    # The second container checks that table with the rules of tests/test_replay.py.
+    assert "lake-geneva-features:ci python /replay/check_table.py /out/features.parquet" in this_step
     # And it runs after the image is built, in the image job.
     assert workflow.index("tags: lake-geneva-features:ci") < workflow.index("Run the pipeline in the image")
 

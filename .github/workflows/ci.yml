@@ -79,21 +79,27 @@ jobs:
           docker run --rm lake-geneva-features:ci python -m lakegeneva.features.build_features --help
           docker run --rm lake-geneva-features:ci python -c "import os; print('image version:', os.environ['APP_VERSION'])"
 
-      # The image runs the whole pipeline (its default command, all five steps) on saved
-      # API answers (MS2 review point A3). LAKEGENEVA_REPLAY makes common/web.py read
-      # them from tests/fixtures/replay, mounted read-only, and --network none switches
-      # the internet off. So a change that breaks a download or the table inside the
-      # image fails here, before the nightly job. Then check_table.py, in the same
-      # container, checks the table the image built: the issue day 26.11 (the saved
-      # answers are from 20.-27.11.2026), all ten features on its row, and some rows with
-      # a label. The same script runs in tests/test_replay.py. (A first version only
-      # looked for the date in the output: with the wind removed, the date was still
-      # right but 5 of the 10 features were missing, and the output went through tee,
-      # which hid the exit code of docker; found in a review on 27.11.2026.)
-      # shell: bash also sets pipefail (GitHub's default shell is only "bash -e").
+      # The image runs the whole pipeline on saved API answers (MS2 review point A3), with
+      # its OWN default command (the CMD of the Dockerfile, nothing after the image name),
+      # so a broken default command fails here too. LAKEGENEVA_REPLAY makes
+      # common/web.py read the answers from tests/fixtures/replay, mounted read-only, and
+      # --network none switches the internet off. The table goes to the folder
+      # replay-out/ on this machine (mounted as /app/data/features; chmod: the user in
+      # the container, uid 1001, must be allowed to write there).
+      # Then a second container runs check_table.py on that table: the issue day 26.11
+      # (the saved answers are from 20.-27.11.2026), all ten features on its row, and at
+      # least one row with a label and all features (a row to learn from). The same
+      # script runs in tests/test_replay.py.
+      # Found in reviews on 27.11.2026: a first version only looked for the date in the
+      # output (with the wind removed, the date was right but 5 of 10 features were
+      # missing), piped it through tee (which hid the exit code of docker), and replaced
+      # the default command. shell: bash also sets pipefail (GitHub's default is "bash -e").
       - name: Run the pipeline in the image on saved API answers
         shell: bash
         run: |
+          mkdir -p replay-out && chmod a+rwx replay-out
           docker run --rm --network none -e LAKEGENEVA_REPLAY=/replay \
-            -v "$PWD/tests/fixtures/replay:/replay:ro" lake-geneva-features:ci \
-            sh -c "python -m lakegeneva.features.run_pipeline && python /replay/check_table.py data/features/features.parquet"
+            -v "$PWD/tests/fixtures/replay:/replay:ro" -v "$PWD/replay-out:/app/data/features" \
+            lake-geneva-features:ci
+          docker run --rm --network none -v "$PWD/tests/fixtures/replay:/replay:ro" -v "$PWD/replay-out:/out:ro" \
+            lake-geneva-features:ci python /replay/check_table.py /out/features.parquet

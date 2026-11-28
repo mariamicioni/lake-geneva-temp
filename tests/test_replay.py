@@ -79,6 +79,12 @@ def test_the_whole_pipeline_runs_on_the_saved_answers_without_internet(monkeypat
     unlabelled = table.assign(**{features.LABEL: None})
     with pytest.raises(SystemExit, match="no row has a label"):
         check_table(unlabelled)
+    # Labels, but every labelled row misses a feature: no row to learn from (review of
+    # 27.11.2026: this passed before). The row of the issue day has no label, so it stays complete.
+    no_training_row = table.copy()
+    no_training_row.loc[table[features.LABEL].notna(), "wind_max_fc_d1"] = None
+    with pytest.raises(SystemExit, match="none has all 10 features too"):
+        check_table(no_training_row)
 
 
 def check_table(table: pd.DataFrame) -> str:

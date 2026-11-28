@@ -35,7 +35,17 @@ def check(table: pd.DataFrame) -> str:
     labelled = int(table[features.LABEL].notna().sum())
     if labelled == 0:
         raise SystemExit("no row has a label")
-    return f"table OK: issue day {day:%Y-%m-%d} with all {len(features.FEATURES)} features, {labelled} rows with a label"
+    # A row the model can learn from needs a label AND all ten features together (as
+    # train.model_rows). Labels alone are not enough: a review on 27.11.2026 removed one
+    # feature from each labelled row, and the check still said OK with 0 usable rows.
+    complete = table[features.FEATURES + [features.LABEL]].to_numpy(dtype=float)
+    usable = int(np.isfinite(complete).all(axis=1).sum())
+    if usable == 0:
+        raise SystemExit(f"{labelled} rows have a label, but none has all {len(features.FEATURES)} features too")
+    return (
+        f"table OK: issue day {day:%Y-%m-%d} with all {len(features.FEATURES)} features, "
+        f"{labelled} rows with a label, {usable} of them with all features (rows to learn from)"
+    )
 
 
 if __name__ == "__main__":
