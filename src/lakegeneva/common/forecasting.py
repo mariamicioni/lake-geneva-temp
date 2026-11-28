@@ -52,13 +52,18 @@ class Predictor(Protocol):
 
     # A Protocol only describes what the functions below use (review of 27.11.2026: the
     # hint "Pipeline" was narrower than the code, which works with any such model).
-    def predict(self, x: pd.DataFrame | np.ndarray) -> np.ndarray: ...
+    # The "/" makes x positional only: the functions below call predict(x), and
+    # scikit-learn names this argument X, so predict(x=...) would not work there.
+    def predict(self, x: pd.DataFrame | np.ndarray, /) -> np.ndarray: ...
 
 
 class TablePredictor(Predictor, Protocol):
     """A Predictor that was trained on a table: scikit-learn then keeps its column names in feature_names_in_."""
 
-    feature_names_in_: np.ndarray
+    # A property: the functions only read the names, and scikit-learn sets them itself
+    # when the model is trained (review of 28.11.2026: a plain attribute would also allow writing).
+    @property
+    def feature_names_in_(self) -> np.ndarray: ...
 
 
 def temperature(
